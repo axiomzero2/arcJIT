@@ -1,0 +1,44 @@
+# Build artifacts
+build/
+build-*/
+out/
+*.o
+*.obj
+*.so
+*.dll
+*.dylib
+*.a
+*.lib
+*.exe
+
+# IDE / editor
+.vscode/
+.idea/
+.cache/
+.clangd/
+compile_commands.json
+*.swp
+*.swo
+*~
+
+# CMake
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Third-party (fetched at configure time)
+third_party/asmjit/
+third_party/enkits/
+third_party/CMakeLists.txt
+
+# Logs / dumps
+*.log
+*.dot
+*.svg
+ir_dump_*.txt
+
+# OS junk
+.DS_Store
+Thumbs.db
+build/

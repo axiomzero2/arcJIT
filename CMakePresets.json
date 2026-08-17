@@ -1,0 +1,49 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default (Release, GCC)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ARCJIT_BUILD_TESTS": "ON",
+                "ARCJIT_BUILD_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "debug",
+            "inherits": "default",
+            "displayName": "Debug (with sanitizer support)",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ARCJIT_USE_SANITIZERS": "ON"
+            }
+        },
+        {
+            "name": "analyze",
+            "inherits": "default",
+            "displayName": "Analyze (clang-tidy + ASan/UBSan)",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "ARCJIT_USE_SANITIZERS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "default", "configurePreset": "default" },
+        { "name": "debug",   "configurePreset": "debug"   },
+        { "name": "analyze", "configurePreset": "analyze" }
+    ],
+    "testPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "output": { "outputOnFailure": true },
+            "execution": { "noTestsAction": "error", "stopOnFailure": false }
+        }
+    ]
+}
