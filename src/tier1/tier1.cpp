@@ -315,6 +315,21 @@ Tier1Compiler::compile(const Tier1Function& fn) {
                 break;
             }
 
+            case Tier1Op::Shl: {
+                load_to(a, pm, inst.src1, x86::rax);
+                load_to(a, pm, inst.src2, x86::rcx);
+                a.shl(x86::rax, x86::cl);
+                store_from(a, pm, inst.dst, x86::rax);
+                break;
+            }
+            case Tier1Op::Shr: {
+                load_to(a, pm, inst.src1, x86::rax);
+                load_to(a, pm, inst.src2, x86::rcx);
+                a.sar(x86::rax, x86::cl);
+                store_from(a, pm, inst.dst, x86::rax);
+                break;
+            }
+
             case Tier1Op::Eq: {
                 load_to(a, pm, inst.src1, x86::rax);
                 load_to(a, pm, inst.src2, x86::rcx);

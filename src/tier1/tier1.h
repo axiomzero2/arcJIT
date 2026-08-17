@@ -48,6 +48,10 @@ enum class Tier1Op : uint8_t {
     Pow,              // dst = pow(src1, src2)
     Neg,              // dst = -src1
 
+    // Bit operations
+    Shl,              // dst = src1 << src2
+    Shr,              // dst = src1 >> src2 (signed)
+
     // Comparisons (produce 0 or 1)
     Eq, Ne, Lt, Gt, Lte, Gte,
 

@@ -197,6 +197,22 @@ public:
                     break;
                 }
 
+                // --- Bit operations ---
+                case Tier1Op::Shl:
+                case Tier1Op::Shr: {
+                    NodeId a = lookup_vreg(inst.src1);
+                    NodeId b = lookup_vreg(inst.src2);
+                    NodeKind k = (inst.op == Tier1Op::Shl) ? NodeKind::Shl : NodeKind::Shr;
+                    std::pair<NodeId, EdgeKind> inputs[] = {
+                        {a, EdgeKind::Data}, {b, EdgeKind::Data},
+                    };
+                    auto n = g.add_node(k,
+                                         NodeFlags::Pure | NodeFlags::GVNable,
+                                         TypeId::Int, 0, inputs);
+                    vreg_to_node[inst.dst] = n;
+                    break;
+                }
+
                 case Tier1Op::Neg: {
                     NodeId a = lookup_vreg(inst.src1);
                     std::pair<NodeId, EdgeKind> inputs[] = {{a, EdgeKind::Data}};
@@ -507,10 +523,34 @@ public:
     explicit SoNToTier1(const Tier2Job& j, Tier1Function& f) : job(j), fn(f) {}
 
     [[nodiscard]] std::expected<void, std::string> run() {
-        // Walk nodes in ID order. Skip the Start node and dead nodes.
-        // For each data node, emit the corresponding Tier1Inst.
+        // Walk nodes in topological order (data dependencies first).
+        // This ensures that when we emit a node, all of its inputs have
+        // already been assigned vregs.
+        //
+        // We compute a topological order by doing a DFS from the Stop node
+        // and emitting nodes in post-order.
+        std::vector<NodeId> order;
+        std::vector<bool> visited(job.graph.size(), false);
+        std::vector<bool> on_stack(job.graph.size(), false);
+
+        // DFS from Stop.
+        if (job.graph.stop().valid()) {
+            topo_visit_(job.graph.stop(), visited, on_stack, order);
+        }
+        // Also visit Start (in case it's not reachable from Stop).
+        if (job.graph.start().valid()) {
+            topo_visit_(job.graph.start(), visited, on_stack, order);
+        }
+        // Visit any remaining nodes (defensive — shouldn't happen in a well-formed graph).
         for (uint32_t i = 1; i < job.graph.size(); ++i) {
             NodeId id{static_cast<uint32_t>(i)};
+            if (!visited[i]) {
+                topo_visit_(id, visited, on_stack, order);
+            }
+        }
+
+        // Now emit Tier-1 instructions in topological order.
+        for (NodeId id : order) {
             const Node& n = job.graph.at(id);
             if (has_flag(n.flags, NodeFlags::IsDead)) continue;
 
@@ -531,7 +571,7 @@ public:
                 case NodeKind::ConstFloat: {
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::LoadConstImm, dst, 0, 0, n.payload);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -547,7 +587,7 @@ public:
                         static_cast<int>(Tier1Op::Add) +
                         static_cast<int>(static_cast<uint8_t>(n.kind) - static_cast<uint8_t>(NodeKind::Add)));
                     fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -556,7 +596,18 @@ public:
                     if (data.empty()) break;
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::Neg, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
+                    break;
+                }
+
+                case NodeKind::Shl:
+                case NodeKind::Shr: {
+                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
+                    if (data.size() < 2) break;
+                    uint32_t dst = fn.alloc_vreg();
+                    Tier1Op op = (n.kind == NodeKind::Shl) ? Tier1Op::Shl : Tier1Op::Shr;
+                    fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -573,7 +624,7 @@ public:
                         static_cast<int>(Tier1Op::Eq) +
                         static_cast<int>(static_cast<uint8_t>(n.kind) - static_cast<uint8_t>(NodeKind::Eq)));
                     fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -584,7 +635,7 @@ public:
                     uint32_t dst = fn.alloc_vreg();
                     Tier1Op op = (n.kind == NodeKind::And) ? Tier1Op::And : Tier1Op::Or;
                     fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -593,7 +644,7 @@ public:
                     if (data.empty()) break;
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::Not, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -602,7 +653,7 @@ public:
                     if (data.empty()) break;
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::IsTruthy, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
                 case NodeKind::ToFloat: {
@@ -610,14 +661,14 @@ public:
                     if (data.empty()) break;
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::ToFloat, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
                 case NodeKind::LoadLocal: {
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::LoadLocal, dst, 0, 0, n.payload);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
                 case NodeKind::StoreLocal: {
@@ -629,7 +680,7 @@ public:
                 case NodeKind::LoadVar: {
                     uint32_t dst = fn.alloc_vreg();
                     fn.emit(Tier1Op::LoadVar, dst, 0, 0, n.payload);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
                 case NodeKind::StoreVar: {
@@ -645,7 +696,7 @@ public:
                     uint32_t src1 = data.empty() ? 0 : get_vreg(data[0]);
                     uint32_t src2 = data.size() >= 2 ? get_vreg(data[1]) : 0;
                     fn.emit(Tier1Op::Call, dst, src1, src2, n.payload);
-                    node_to_vreg[i] = dst;
+                    node_to_vreg[id.value] = dst;
                     break;
                 }
 
@@ -673,6 +724,34 @@ public:
     }
 
 private:
+    // DFS post-order traversal for topological sorting.
+    void topo_visit_(NodeId id, std::vector<bool>& visited,
+                     std::vector<bool>& on_stack, std::vector<NodeId>& order) {
+        if (!id.valid() || id.value >= visited.size()) return;
+        if (visited[id.value]) return;
+        if (on_stack[id.value]) return;  // cycle — skip (shouldn't happen in SSA)
+
+        on_stack[id.value] = true;
+        visited[id.value] = true;
+
+        // Visit all data inputs first (so they come before this node in post-order).
+        auto inputs = job.graph.inputs_of(id);
+        for (const auto& e : inputs) {
+            if (e.kind == EdgeKind::Data) {
+                topo_visit_(e.target, visited, on_stack, order);
+            }
+        }
+        // Also visit control/effect inputs (they should come first too).
+        for (const auto& e : inputs) {
+            if (e.kind != EdgeKind::Data) {
+                topo_visit_(e.target, visited, on_stack, order);
+            }
+        }
+
+        on_stack[id.value] = false;
+        order.push_back(id);
+    }
+
     [[nodiscard]] uint32_t get_vreg(NodeId n) {
         auto it = node_to_vreg.find(n.value);
         if (it != node_to_vreg.end()) return it->second;
@@ -744,20 +823,28 @@ void build_demo_graph(Graph& g) {
 PassResult run_tier2_pipeline(Tier2Job& job) {
     // Pipeline order matters:
     //   1. TypeNarrowing — establish types first (other passes use them)
-    //   2. GVN — deduplicate before other passes can create dupes
-    //   3. ConstantFolding — fold constants
-    //   4. AlgebraicSimplification — simplify identities
-    //   5. ComparisonFolding — fold comparisons
-    //   6. BranchFolding — fold constant branches
-    //   7. StrengthReduction — replace expensive ops (future)
-    //   8. DCE — clean up dead nodes
+    //   2. CallInlining — inline before optimization (exposes more opportunities)
+    //   3. EscapeAnalysis — mark non-escaping allocations
+    //   4. GVN — deduplicate before other passes can create dupes
+    //   5. ConstantFolding — fold constants
+    //   6. AlgebraicSimplification — simplify identities
+    //   7. ComparisonFolding — fold comparisons
+    //   8. BranchFolding — fold constant branches
+    //   9. StrengthReduction — replace expensive ops with shifts
+    //  10. LICM — hoist loop-invariant code
+    //  11. LoopUnrolling — unroll hot loops
+    //  12. DCE — clean up dead nodes
     job.pipeline.add(std::make_unique<TypeNarrowingPass>());
+    job.pipeline.add(std::make_unique<CallInliningPass>());
+    job.pipeline.add(std::make_unique<EscapeAnalysisPass>());
     job.pipeline.add(std::make_unique<GVNPass>());
     job.pipeline.add(std::make_unique<ConstantFoldingPass>());
     job.pipeline.add(std::make_unique<AlgebraicSimplificationPass>());
     job.pipeline.add(std::make_unique<ComparisonFoldingPass>());
     job.pipeline.add(std::make_unique<BranchFoldingPass>());
     job.pipeline.add(std::make_unique<StrengthReductionPass>());
+    job.pipeline.add(std::make_unique<LICMPass>());
+    job.pipeline.add(std::make_unique<LoopUnrollingPass>());
     job.pipeline.add(std::make_unique<DeadCodeElimPass>());
     return job.pipeline.run_to_fixpoint(job.graph, 8);
 }

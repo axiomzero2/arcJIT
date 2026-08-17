@@ -60,10 +60,11 @@ target_link_libraries(arcjit_tier2 PUBLIC
     asmjit::asmjit
 )
 
-# --- Runtime (orchestrator, interpreter, thread pool, deopt validator) ------
+# --- Runtime (orchestrator, interpreter, thread pool, deopt validator, fuzzer)
 add_library(arcjit_runtime STATIC
     runtime/runtime.cpp
     runtime/deopt_validator.cpp
+    runtime/fuzzer.cpp
 )
 target_include_directories(arcjit_runtime PUBLIC .)
 target_compile_features(arcjit_runtime PUBLIC cxx_std_23)

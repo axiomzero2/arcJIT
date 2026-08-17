@@ -33,10 +33,14 @@ add_executable(arcjit_tests
     golden/test_golden_compare_fold.cpp
     golden/test_golden_branch_fold.cpp
     golden/test_golden_type_narrow.cpp
+    golden/test_golden_strength_reduce.cpp
+    golden/test_golden_licm.cpp
+    golden/test_golden_escape_analysis.cpp
     test_rule36_branch_bug.cpp
     test_replay.cpp
     test_instrumentation.cpp
     test_deopt_validator.cpp
+    test_fuzzer.cpp
 )
 target_include_directories(arcjit_tests PRIVATE .)
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)

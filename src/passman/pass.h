@@ -160,4 +160,35 @@ public:
     PassResult run(Graph& g) override;
 };
 
+// Loop invariant code motion — hoist pure, loop-invariant operations
+// out of loops. Requires loop detection (Loop + LoopExit nodes).
+class LICMPass : public Pass {
+public:
+    LICMPass() : Pass("LICM") {}
+    PassResult run(Graph& g) override;
+};
+
+// Escape analysis — prove that an Allocate doesn't escape the function.
+// When combined with ScalarReplacement, non-escaping objects are broken
+// into their fields as separate SSA values.
+class EscapeAnalysisPass : public Pass {
+public:
+    EscapeAnalysisPass() : Pass("EscapeAnalysis") {}
+    PassResult run(Graph& g) override;
+};
+
+// Loop unrolling — unroll hot loops by a small factor (e.g., 4×).
+class LoopUnrollingPass : public Pass {
+public:
+    LoopUnrollingPass() : Pass("LoopUnroll") {}
+    PassResult run(Graph& g) override;
+};
+
+// Call inlining — inline monomorphic call sites whose target fits the budget.
+class CallInliningPass : public Pass {
+public:
+    CallInliningPass() : Pass("CallInline") {}
+    PassResult run(Graph& g) override;
+};
+
 }  // namespace arcjit

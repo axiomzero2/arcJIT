@@ -41,6 +41,8 @@ std::string_view node_kind_name(NodeKind k) noexcept {
         case NodeKind::And:             return "And";
         case NodeKind::Or:              return "Or";
         case NodeKind::Not:             return "Not";
+        case NodeKind::Shl:             return "Shl";
+        case NodeKind::Shr:             return "Shr";
         case NodeKind::ToFloat:         return "ToFloat";
         case NodeKind::ToBool:          return "ToBool";
         case NodeKind::LoadVar:         return "LoadVar";

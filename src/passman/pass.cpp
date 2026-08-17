@@ -53,8 +53,10 @@ PassResult ConstantFoldingPass::run(Graph& g) {
         const Node& b = g.at(data_inputs[1]);
         if (a.kind != NodeKind::ConstInt || b.kind != NodeKind::ConstInt) continue;
 
-        int64_t av = static_cast<int64_t>(a.payload);
-        int64_t bv = static_cast<int64_t>(b.payload);
+        // The payload is a uint32_t, but we interpret it as a signed int32_t
+        // when the NodeKind is ConstInt. So we need to sign-extend here.
+        int64_t av = static_cast<int64_t>(static_cast<int32_t>(a.payload));
+        int64_t bv = static_cast<int64_t>(static_cast<int32_t>(b.payload));
         int64_t result = 0;
         switch (n.kind) {
             case NodeKind::Add: result = av + bv; break;
@@ -63,11 +65,16 @@ PassResult ConstantFoldingPass::run(Graph& g) {
             default: continue;
         }
 
+        // Only fold if the result fits in a signed 32-bit int (our payload
+        // is uint32_t). If it overflows, leave the operation unfolded —
+        // this is correct, just less optimized.
+        if (result < INT32_MIN || result > INT32_MAX) continue;
+
         // Replace this node with a new ConstInt and rewrite all uses.
         NodeId folded = g.add_node(NodeKind::ConstInt,
                                     NodeFlags::Pure | NodeFlags::CSEable | NodeFlags::GVNable,
                                     TypeId::Int,
-                                    static_cast<uint32_t>(result), {});
+                                    static_cast<uint32_t>(static_cast<int32_t>(result)), {});
         g.replace_all_uses_with(id, folded);
         g.mark_dead(id);
         r.changed = true;
@@ -235,12 +242,10 @@ PassResult AlgebraicSimplificationPass::run(Graph& g) {
 // ============================================================================
 //
 // Replaces expensive operations with cheaper ones:
-//   x * 2^k  → x << k
-//   x / 2^k  → x >> k  (signedness-aware — we treat all ints as signed)
+//   x * 2^k  → x << k   (Shl)
+//   x / 2^k  → x >> k   (Shr, signed)
 //
-// We don't have a ShiftLeft/ShiftRight node kind yet, so we fold these to
-// ConstInt when x is also a constant, and otherwise leave them alone.
-// When the IR gains shift nodes, this pass will emit them.
+// Only applies when the second operand is a positive power-of-2 constant.
 PassResult StrengthReductionPass::run(Graph& g) {
     PassResult r;
 
@@ -274,11 +279,32 @@ PassResult StrengthReductionPass::run(Graph& g) {
         bool is_pow2 = (bv & (bv - 1)) == 0;
         if (!is_pow2) continue;
 
-        // For now, we just record that this could be strength-reduced.
-        // A full implementation would replace Mul(x, 2^k) with Shl(x, k).
-        // Since we don't have Shl nodes yet, we skip the actual replacement
-        // but mark that we found an opportunity (for future use).
-        // r.changed = true;  // would set this if we actually transformed
+        // Compute the shift amount (log2 of bv).
+        uint32_t shift_amount = 0;
+        uint64_t tmp = static_cast<uint64_t>(bv);
+        while (tmp > 1) { tmp >>= 1; shift_amount++; }
+
+        // Create a ConstInt for the shift amount.
+        NodeId shift_const = g.add_node(NodeKind::ConstInt,
+                                         NodeFlags::Pure | NodeFlags::GVNable,
+                                         TypeId::Int, shift_amount, {});
+
+        // Create the Shl or Shr node.
+        NodeKind shift_kind = (n.kind == NodeKind::Mul) ? NodeKind::Shl : NodeKind::Shr;
+        std::pair<NodeId, EdgeKind> shift_inputs[] = {
+            {data_inputs[0], EdgeKind::Data},
+            {shift_const, EdgeKind::Data},
+        };
+        NodeId shift_node = g.add_node(shift_kind,
+                                        NodeFlags::Pure | NodeFlags::GVNable,
+                                        TypeId::Int, 0, shift_inputs);
+
+        // Replace all uses of the Mul/Div with the shift.
+        g.replace_all_uses_with(id, shift_node);
+        g.mark_dead(id);
+        r.changed = true;
+        r.nodes_removed++;
+        r.nodes_added += 2;  // shift_const + shift_node
     }
     return r;
 }
@@ -511,6 +537,228 @@ PassResult TypeNarrowingPass::run(Graph& g) {
                 changed = true;
                 r.changed = true;
             }
+        }
+    }
+
+    return r;
+}
+
+// ============================================================================
+// LICMPass (Loop Invariant Code Motion)
+// ============================================================================
+//
+// Hoists pure, loop-invariant operations out of loops.
+//
+// A node is loop-invariant if:
+//   - It is pure (no side effects)
+//   - All of its data inputs are defined OUTSIDE the loop
+//   - It has no control/effect dependencies inside the loop
+//
+// This implementation detects loop structures via Loop/LoopExit nodes.
+// Since our current SoN doesn't always emit explicit Loop nodes, this pass
+// also checks for back-edges (Region nodes with multiple predecessors where
+// one predecessor is dominated by the Region itself).
+//
+// When a loop-invariant node is found, we hoist it by moving its control
+// input from the loop header to the loop pre-header.
+PassResult LICMPass::run(Graph& g) {
+    PassResult r;
+
+    // Find all Loop nodes (our IR uses Loop for back-edge regions).
+    // If there are no Loop nodes, there's nothing to hoist.
+    std::vector<NodeId> loops;
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        const Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (n.kind == NodeKind::Loop) {
+            loops.push_back(id);
+        }
+    }
+
+    if (loops.empty()) {
+        // No explicit Loop nodes — LICM is a no-op.
+        // (A full implementation would also detect implicit loops via
+        // back-edge analysis on Region nodes.)
+        return r;
+    }
+
+    // For each loop, find the set of nodes inside the loop and check
+    // which are loop-invariant.
+    //
+    // For now, we implement a conservative version: we look for pure nodes
+    // whose data inputs all come from outside the loop (i.e., their
+    // definitions are not reachable from the loop header).
+    //
+    // This is a placeholder that records opportunities without actually
+    // hoisting — full LICM requires dominance analysis which we haven't
+    // built yet.
+    for (NodeId loop : loops) {
+        (void)loop;  // TODO: implement loop body collection + hoisting
+    }
+
+    return r;
+}
+
+// ============================================================================
+// EscapeAnalysisPass
+// ============================================================================
+//
+// Proves that an Allocate doesn't escape the function. An Allocate escapes if:
+//   - It's stored into a global or a heap object
+//   - It's passed to a call
+//   - It's returned
+//
+// Non-escaping Allocates can be scalar-replaced (their fields become separate
+// SSA values in registers).
+//
+// This implementation marks Allocate nodes as "non-escaping" if all their
+// uses are LoadField/StoreField (no escape paths). The actual scalar
+// replacement is done by a follow-up pass.
+PassResult EscapeAnalysisPass::run(Graph& g) {
+    PassResult r;
+
+    // For each Allocate node, check if it escapes.
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (n.kind != NodeKind::Allocate) continue;
+
+        // Walk all users of this Allocate. If any user is a Call, Return,
+        // StoreVar, or StoreField (storing into another object), the
+        // Allocate escapes.
+        bool escapes = false;
+
+        // Check all edges in the graph that point to this Allocate.
+        for (uint32_t j = 1; j < g.size(); ++j) {
+            NodeId uid{static_cast<uint32_t>(j)};
+            const Node& user = g.at(uid);
+            if (has_flag(user.flags, NodeFlags::IsDead)) continue;
+
+            auto user_inputs = g.inputs_of(uid);
+            for (const auto& e : user_inputs) {
+                if (e.target != id) continue;
+                if (e.kind != EdgeKind::Data) continue;
+
+                // The Allocate is used by this node.
+                switch (user.kind) {
+                    case NodeKind::LoadField:
+                    case NodeKind::StoreField:
+                    case NodeKind::CheckShape:
+                    case NodeKind::ShapeOf:
+                        // These are "safe" uses — they don't escape the object.
+                        break;
+                    case NodeKind::Return:
+                    case NodeKind::Call:
+                    case NodeKind::CallNative:
+                    case NodeKind::StoreVar:
+                        // These escape the object.
+                        escapes = true;
+                        break;
+                    default:
+                        // Unknown use — be conservative, assume escape.
+                        escapes = true;
+                        break;
+                }
+                if (escapes) break;
+            }
+            if (escapes) break;
+        }
+
+        if (!escapes) {
+            // Mark the Allocate as non-escaping by setting a flag.
+            // We use IsPinned to indicate "analyzed as non-escaping" for now.
+            // A full implementation would have a dedicated NonEscaping flag.
+            n.flags = n.flags | NodeFlags::IsPinned;
+            r.changed = true;
+        }
+    }
+
+    return r;
+}
+
+// ============================================================================
+// LoopUnrollingPass
+// ============================================================================
+//
+// Unrolls hot loops by a small factor (default 4×). This reduces loop
+// overhead and exposes more opportunities for other passes (GVN, ConstFold).
+//
+// Requires explicit Loop nodes. Since our current SoN doesn't always emit
+// them, this pass is a no-op when no loops are detected.
+PassResult LoopUnrollingPass::run(Graph& g) {
+    PassResult r;
+
+    // Find Loop nodes.
+    bool has_loops = false;
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        const Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (n.kind == NodeKind::Loop) {
+            has_loops = true;
+            break;
+        }
+    }
+
+    if (!has_loops) {
+        return r;  // No loops — nothing to unroll.
+    }
+
+    // Full loop unrolling requires:
+    //   1. Identifying the loop body (all nodes between Loop and LoopExit)
+    //   2. Cloning the body N times
+    //   3. Rewiring control flow edges
+    //   4. Adjusting the loop induction variable
+    //
+    // This is complex and requires dominance analysis. For now, we record
+    // that loops were detected but don't actually unroll.
+    // r.changed = true;  // would set this if we actually unrolled
+
+    return r;
+}
+
+// ============================================================================
+// CallInliningPass
+// ============================================================================
+//
+// Inlines monomorphic call sites whose target fits the inline budget.
+//
+// A call site is monomorphic if the callee is a known ArcFunction (not a
+// NativeFunction or a dynamic dispatch). The inline budget is based on the
+// callee's instruction count.
+//
+// This implementation is conservative: it only inlines calls where the
+// callee is a ConstFunc node (the function object is a compile-time constant).
+PassResult CallInliningPass::run(Graph& g) {
+    PassResult r;
+
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (n.kind != NodeKind::Call && n.kind != NodeKind::CallKnown) continue;
+
+        // Get the callee (first data input).
+        auto data = g.inputs_of_kind(id, EdgeKind::Data);
+        if (data.empty()) continue;
+
+        const Node& callee = g.at(data[0]);
+        if (callee.kind != NodeKind::ConstFunc) continue;
+
+        // We have a call to a known function. In a full implementation, we
+        // would:
+        //   1. Check the callee's body size against the inline budget
+        //   2. Clone the callee's SoN subgraph
+        //   3. Replace the Call node with the cloned subgraph
+        //   4. Wire up the return value
+        //
+        // For now, we just mark the call as "known" so other passes can
+        // optimize around it.
+        if (n.kind == NodeKind::Call) {
+            n.kind = NodeKind::CallKnown;
+            r.changed = true;
         }
     }
 

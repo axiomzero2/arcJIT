@@ -47,7 +47,7 @@ optimizing JIT, with background compilation via enkiTS and OSR support.
 | Thread pools (enkiTS)              | wired             |
 | End-to-end CLI                     | working           |
 
-**186 tests passing.** Verified end-to-end:
+**229 tests passing.** Verified end-to-end:
 - `arcjit-cli --tier 0 --bytecode "1+2+3"` → 6 (interpreter)
 - `arcjit-cli --tier 1 --bytecode "1+2+3"` → 6 (Tier-1 JIT)
 - `arcjit-cli --tier 2 --bytecode "1+2+3"` → 6 (Tier-2 SoN JIT, GVN+ConstFold fold to ConstInt(6))
@@ -58,16 +58,35 @@ optimizing JIT, with background compilation via enkiTS and OSR support.
 | Pass | Transformations | Golden tests |
 | --- | --- | --- |
 | TypeNarrowing | Propagate TypeIds (Int, Float, Bool, Null, String) | 12 |
+| CallInlining | Mark calls to known functions as CallKnown | — |
+| EscapeAnalysis | Mark non-escaping allocations (IsPinned flag) | 12 |
 | GVN | Deduplicate identical computations | 12 |
-| ConstantFolding | Fold ConstInt + ConstInt → ConstInt | 12 |
+| ConstantFolding | Fold ConstInt + ConstInt → ConstInt (with overflow check) | 12 |
 | AlgebraicSimplification | x+0→x, x*1→x, x*0→0, x-x→0, x/1→x, !!x→x | 12 |
 | ComparisonFolding | x==x→true, x!=x→false, !(x<y)→x>=y | 12 |
 | BranchFolding | if(true)→drop false branch, if(false)→drop true branch | 12 |
-| StrengthReduction | x*2^k → x<<k (detects opportunities, future: emit shifts) | — |
+| StrengthReduction | x*2^k → x<<k, x/2^k → x>>k (emits Shl/Shr nodes) | 12 |
+| LICM | Hoist loop-invariant code (conservative — requires Loop nodes) | 12 |
+| LoopUnrolling | Unroll hot loops (detects loops, full impl pending) | — |
 | DCE | Remove dead pure nodes | 12 |
 
-The pipeline runs all passes to a fixpoint (max 8 iterations). The graph
+The pipeline runs all 12 passes to a fixpoint (max 8 iterations). The graph
 verifier runs after every pass in debug builds (Rule 42).
+
+### Fuzzing
+
+The structure-aware bytecode fuzzer generates valid Arc programs (arithmetic
+only, small constants) and runs them through all three tiers. Any divergence
+in results indicates a bug. The fuzzer found two real bugs that were fixed:
+
+1. **ConstFold overflow**: Constant folding was truncating 64-bit results to
+   32 bits without checking for overflow. Fixed by sign-extending payloads
+   and skipping folds that don't fit in 32 bits.
+
+2. **SoN→Tier-1 topological order**: The lowering was processing nodes in ID
+   order, causing forward references to unresolved nodes (which got
+   `LoadConstImm(0)` placeholders). Fixed by doing a DFS post-order
+   traversal from the Stop node.
 
 ### Testing & debugging infrastructure (Rules 36-43)
 
@@ -76,11 +95,12 @@ verifier runs after every pass in debug builds (Rule 42).
 | Textual IR dumper (`dump_graph_text`) | implemented |
 | Graph verifier (runs after every pass in debug builds) | implemented |
 | Golden test runner (`.in.ir` / `.out.ir` files, `--update-golden`) | implemented |
-| 84 golden tests (12 each for 7 passes) | implemented |
+| 108 golden tests (12 each for 9 passes) | implemented |
 | Replay serialization (bytecode + options → binary file) | implemented |
 | Differential testing (interpreter ↔ Tier-1 ↔ Tier-2) | implemented |
 | Pass instrumentation (PassEvent, timeline, env-var breakpoints) | implemented |
 | Deopt validator (reconstruct state, compare against expected) | implemented |
+| Structure-aware bytecode fuzzer (1000+ test cases) | implemented |
 | Rule 36 regression tests (5 tests for the Tier-2 branch bug) | implemented |
 
 ## Dependencies

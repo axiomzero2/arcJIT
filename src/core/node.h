@@ -61,6 +61,10 @@ enum class NodeKind : uint16_t {
     Eq, Ne, Lt, Gt, Lte, Gte,
     And, Or, Not,
 
+    // Bit operations (pure)
+    Shl,  // shift left:  x << amount
+    Shr,  // shift right (signed): x >> amount
+
     // Conversions
     ToFloat,
     ToBool,
