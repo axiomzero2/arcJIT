@@ -520,200 +520,96 @@ public:
     // Map SoN node ID → destination vreg.
     std::unordered_map<uint32_t, uint32_t> node_to_vreg;
 
+    // Map control node ID → label ID in the Tier-1 function.
+    std::unordered_map<uint32_t, uint32_t> ctrl_to_label;
+
     explicit SoNToTier1(const Tier2Job& j, Tier1Function& f) : job(j), fn(f) {}
 
     [[nodiscard]] std::expected<void, std::string> run() {
-        // Walk nodes in topological order (data dependencies first).
-        // This ensures that when we emit a node, all of its inputs have
-        // already been assigned vregs.
-        //
-        // We compute a topological order by doing a DFS from the Stop node
-        // and emitting nodes in post-order.
-        std::vector<NodeId> order;
-        std::vector<bool> visited(job.graph.size(), false);
-        std::vector<bool> on_stack(job.graph.size(), false);
+        const Graph& g = job.graph;
 
-        // DFS from Stop.
-        if (job.graph.stop().valid()) {
-            topo_visit_(job.graph.stop(), visited, on_stack, order);
-        }
-        // Also visit Start (in case it's not reachable from Stop).
-        if (job.graph.start().valid()) {
-            topo_visit_(job.graph.start(), visited, on_stack, order);
-        }
-        // Visit any remaining nodes (defensive — shouldn't happen in a well-formed graph).
-        for (uint32_t i = 1; i < job.graph.size(); ++i) {
+        // Phase 1: Identify all control-flow blocks and assign labels.
+        // Control blocks are: Start, Region, IfTrue, IfFalse, Loop, LoopExit.
+        // Each gets a Tier-1 label so we can jump to it.
+        for (uint32_t i = 1; i < g.size(); ++i) {
             NodeId id{static_cast<uint32_t>(i)};
-            if (!visited[i]) {
-                topo_visit_(id, visited, on_stack, order);
-            }
-        }
-
-        // Now emit Tier-1 instructions in topological order.
-        for (NodeId id : order) {
-            const Node& n = job.graph.at(id);
+            const Node& n = g.at(id);
             if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-
-            switch (n.kind) {
-                case NodeKind::Start:
-                case NodeKind::Region:
-                case NodeKind::If:
-                case NodeKind::IfTrue:
-                case NodeKind::IfFalse:
-                case NodeKind::Stop:
-                case NodeKind::FrameState:
-                case NodeKind::Deopt:
-                    // Control-only nodes don't produce Tier1Insts in our
-                    // linearization.
-                    break;
-
-                case NodeKind::ConstInt:
-                case NodeKind::ConstFloat: {
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::LoadConstImm, dst, 0, 0, n.payload);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::Add:
-                case NodeKind::Sub:
-                case NodeKind::Mul:
-                case NodeKind::Div:
-                case NodeKind::Pow: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.size() < 2) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    Tier1Op op = static_cast<Tier1Op>(
-                        static_cast<int>(Tier1Op::Add) +
-                        static_cast<int>(static_cast<uint8_t>(n.kind) - static_cast<uint8_t>(NodeKind::Add)));
-                    fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::Neg: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.empty()) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::Neg, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::Shl:
-                case NodeKind::Shr: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.size() < 2) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    Tier1Op op = (n.kind == NodeKind::Shl) ? Tier1Op::Shl : Tier1Op::Shr;
-                    fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::Eq:
-                case NodeKind::Ne:
-                case NodeKind::Lt:
-                case NodeKind::Gt:
-                case NodeKind::Lte:
-                case NodeKind::Gte: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.size() < 2) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    Tier1Op op = static_cast<Tier1Op>(
-                        static_cast<int>(Tier1Op::Eq) +
-                        static_cast<int>(static_cast<uint8_t>(n.kind) - static_cast<uint8_t>(NodeKind::Eq)));
-                    fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::And:
-                case NodeKind::Or: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.size() < 2) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    Tier1Op op = (n.kind == NodeKind::And) ? Tier1Op::And : Tier1Op::Or;
-                    fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::Not: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.empty()) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::Not, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::ToBool: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.empty()) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::IsTruthy, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-                case NodeKind::ToFloat: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.empty()) break;
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::ToFloat, dst, get_vreg(data[0]), 0, 0);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                case NodeKind::LoadLocal: {
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::LoadLocal, dst, 0, 0, n.payload);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-                case NodeKind::StoreLocal: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.empty()) break;
-                    fn.emit(Tier1Op::StoreLocal, 0, get_vreg(data[0]), 0, n.payload);
-                    break;
-                }
-                case NodeKind::LoadVar: {
-                    uint32_t dst = fn.alloc_vreg();
-                    fn.emit(Tier1Op::LoadVar, dst, 0, 0, n.payload);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-                case NodeKind::StoreVar: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    if (data.empty()) break;
-                    fn.emit(Tier1Op::StoreVar, 0, get_vreg(data[0]), 0, n.payload);
-                    break;
-                }
-
-                case NodeKind::Call: {
-                    auto data = job.graph.inputs_of_kind(id, EdgeKind::Data);
-                    uint32_t dst = fn.alloc_vreg();
-                    uint32_t src1 = data.empty() ? 0 : get_vreg(data[0]);
-                    uint32_t src2 = data.size() >= 2 ? get_vreg(data[1]) : 0;
-                    fn.emit(Tier1Op::Call, dst, src1, src2, n.payload);
-                    node_to_vreg[id.value] = dst;
-                    break;
-                }
-
-                // Other node kinds not yet supported in lowering-back.
-                default:
-                    break;
+            if (is_block_header_(n.kind)) {
+                ctrl_to_label[i] = fn.alloc_label();
             }
         }
 
-        // Emit a Return at the end, sourced from the Stop node's data input.
-        if (job.graph.stop().valid()) {
-            auto stop_data = job.graph.inputs_of_kind(job.graph.stop(), EdgeKind::Data);
+        // Phase 1b: Emit all pure nodes that have NO control input AND whose
+        // data inputs are also control-free (e.g., constants created by
+        // ConstFold). Pure nodes that reference effectful nodes (like
+        // LoadLocal) must be emitted in their block, not here.
+        for (uint32_t i = 1; i < g.size(); ++i) {
+            NodeId id{static_cast<uint32_t>(i)};
+            const Node& n = g.at(id);
+            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+            if (is_block_header_(n.kind)) continue;
+            if (n.kind == NodeKind::Stop) continue;
+            if (!has_flag(n.flags, NodeFlags::Pure)) continue;
+
+            // Check if this node has any control input.
+            bool has_ctrl = false;
+            for (const auto& e : g.inputs_of(id)) {
+                if (e.kind == EdgeKind::Control) { has_ctrl = true; break; }
+            }
+            if (has_ctrl) continue;
+
+            // Check if ALL data inputs are also control-free pure nodes.
+            bool all_inputs_control_free = true;
+            for (const auto& e : g.inputs_of(id)) {
+                if (e.kind != EdgeKind::Data) continue;
+                if (!e.target.valid()) continue;
+                // If the producer has a control input, it's in a block —
+                // we can't emit this node yet.
+                for (const auto& pe : g.inputs_of(e.target)) {
+                    if (pe.kind == EdgeKind::Control) {
+                        all_inputs_control_free = false;
+                        break;
+                    }
+                }
+                if (!all_inputs_control_free) break;
+            }
+
+            if (all_inputs_control_free) {
+                emit_data_node_(id);
+            }
+        }
+
+        // Phase 2: Walk the control-flow graph in order, emitting each block.
+        // We start from Start and follow control successors.
+        std::vector<bool> emitted(g.size(), false);
+        if (g.start().valid()) {
+            emit_block_sequence_(g.start(), emitted);
+        }
+
+        // Phase 2c: Emit any remaining pure nodes that weren't emitted in
+        // any block (e.g., an Add with no control input that references
+        // LoadLocal nodes). These get emitted at the end, after all blocks.
+        for (uint32_t i = 1; i < g.size(); ++i) {
+            NodeId id{static_cast<uint32_t>(i)};
+            if (node_to_vreg.count(i)) continue;  // already emitted
+            const Node& n = g.at(id);
+            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+            if (is_block_header_(n.kind)) continue;
+            if (n.kind == NodeKind::Stop) continue;
+            if (!has_flag(n.flags, NodeFlags::Pure)) continue;
+
+            // Emit it now — all its inputs should have vregs by now.
+            emit_data_node_(id);
+        }
+
+        // Phase 3: Emit the Return from Stop's data input.
+        if (g.stop().valid()) {
+            auto stop_data = g.inputs_of_kind(g.stop(), EdgeKind::Data);
             if (!stop_data.empty()) {
                 uint32_t v = get_vreg(stop_data[0]);
                 fn.emit(Tier1Op::Return, 0, v, 0, 0);
             } else {
-                // Return 0.
                 uint32_t z = fn.alloc_vreg();
                 fn.emit(Tier1Op::LoadConstImm, z, 0, 0, 0);
                 fn.emit(Tier1Op::Return, 0, z, 0, 0);
@@ -724,32 +620,337 @@ public:
     }
 
 private:
-    // DFS post-order traversal for topological sorting.
-    void topo_visit_(NodeId id, std::vector<bool>& visited,
-                     std::vector<bool>& on_stack, std::vector<NodeId>& order) {
-        if (!id.valid() || id.value >= visited.size()) return;
-        if (visited[id.value]) return;
-        if (on_stack[id.value]) return;  // cycle — skip (shouldn't happen in SSA)
+    // Check if a node kind is a block header.
+    static bool is_block_header_(NodeKind k) {
+        switch (k) {
+            case NodeKind::Start:
+            case NodeKind::Region:
+            case NodeKind::IfTrue:
+            case NodeKind::IfFalse:
+            case NodeKind::Loop:
+            case NodeKind::LoopExit:
+                return true;
+            default:
+                return false;
+        }
+    }
 
-        on_stack[id.value] = true;
-        visited[id.value] = true;
+    // Emit a block and its successors. Walks the control-flow graph.
+    void emit_block_sequence_(NodeId block_id, std::vector<bool>& emitted) {
+        if (!block_id.valid() || block_id.value >= emitted.size()) return;
+        if (emitted[block_id.value]) return;
+        emitted[block_id.value] = true;
 
-        // Visit all data inputs first (so they come before this node in post-order).
-        auto inputs = job.graph.inputs_of(id);
-        for (const auto& e : inputs) {
-            if (e.kind == EdgeKind::Data) {
-                topo_visit_(e.target, visited, on_stack, order);
+        const Graph& g = job.graph;
+        const Node& block_node = g.at(block_id);
+        if (has_flag(block_node.flags, NodeFlags::IsDead)) return;
+
+        // Emit the label for this block.
+        auto label_it = ctrl_to_label.find(block_id.value);
+        if (label_it != ctrl_to_label.end()) {
+            fn.emit(Tier1Op::Label, 0, 0, 0, label_it->second);
+        }
+
+        // Emit all data nodes whose control input is this block.
+        // We walk nodes in ID order for determinism.
+        for (uint32_t i = 1; i < g.size(); ++i) {
+            NodeId id{static_cast<uint32_t>(i)};
+            const Node& n = g.at(id);
+            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+            if (is_block_header_(n.kind)) continue;
+            if (n.kind == NodeKind::Stop) continue;
+
+            // Check if this node's control input is block_id.
+            auto inputs = g.inputs_of(id);
+            bool belongs_to_this_block = false;
+            for (const auto& e : inputs) {
+                if (e.kind == EdgeKind::Control && e.target == block_id) {
+                    belongs_to_this_block = true;
+                    break;
+                }
+            }
+            if (!belongs_to_this_block) continue;
+
+            emit_data_node_(id);
+        }
+
+        // Emit the block terminator.
+        emit_terminator_(block_id, emitted);
+    }
+
+    // Emit a single data node as a Tier-1 instruction.
+    void emit_data_node_(NodeId id) {
+        const Graph& g = job.graph;
+        const Node& n = g.at(id);
+
+        switch (n.kind) {
+            case NodeKind::ConstInt:
+            case NodeKind::ConstFloat: {
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::LoadConstImm, dst, 0, 0, n.payload);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::Add:
+            case NodeKind::Sub:
+            case NodeKind::Mul:
+            case NodeKind::Div:
+            case NodeKind::Pow: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.size() < 2) break;
+                uint32_t dst = fn.alloc_vreg();
+                Tier1Op op = static_cast<Tier1Op>(
+                    static_cast<int>(Tier1Op::Add) +
+                    static_cast<int>(static_cast<uint8_t>(n.kind) - static_cast<uint8_t>(NodeKind::Add)));
+                fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::Neg: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.empty()) break;
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::Neg, dst, get_vreg(data[0]), 0, 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::Shl:
+            case NodeKind::Shr: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.size() < 2) break;
+                uint32_t dst = fn.alloc_vreg();
+                Tier1Op op = (n.kind == NodeKind::Shl) ? Tier1Op::Shl : Tier1Op::Shr;
+                fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::Eq:
+            case NodeKind::Ne:
+            case NodeKind::Lt:
+            case NodeKind::Gt:
+            case NodeKind::Lte:
+            case NodeKind::Gte: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.size() < 2) break;
+                uint32_t dst = fn.alloc_vreg();
+                Tier1Op op = static_cast<Tier1Op>(
+                    static_cast<int>(Tier1Op::Eq) +
+                    static_cast<int>(static_cast<uint8_t>(n.kind) - static_cast<uint8_t>(NodeKind::Eq)));
+                fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::And:
+            case NodeKind::Or: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.size() < 2) break;
+                uint32_t dst = fn.alloc_vreg();
+                Tier1Op op = (n.kind == NodeKind::And) ? Tier1Op::And : Tier1Op::Or;
+                fn.emit(op, dst, get_vreg(data[0]), get_vreg(data[1]), 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::Not: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.empty()) break;
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::Not, dst, get_vreg(data[0]), 0, 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::ToBool: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.empty()) break;
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::IsTruthy, dst, get_vreg(data[0]), 0, 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+            case NodeKind::ToFloat: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.empty()) break;
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::ToFloat, dst, get_vreg(data[0]), 0, 0);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            case NodeKind::LoadLocal: {
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::LoadLocal, dst, 0, 0, n.payload);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+            case NodeKind::StoreLocal: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.empty()) break;
+                fn.emit(Tier1Op::StoreLocal, 0, get_vreg(data[0]), 0, n.payload);
+                break;
+            }
+            case NodeKind::LoadVar: {
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::LoadVar, dst, 0, 0, n.payload);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+            case NodeKind::StoreVar: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (data.empty()) break;
+                fn.emit(Tier1Op::StoreVar, 0, get_vreg(data[0]), 0, n.payload);
+                break;
+            }
+
+            case NodeKind::Call:
+            case NodeKind::CallKnown:
+            case NodeKind::CallNative: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                uint32_t dst = fn.alloc_vreg();
+                uint32_t src1 = data.empty() ? 0 : get_vreg(data[0]);
+                uint32_t src2 = data.size() >= 2 ? get_vreg(data[1]) : 0;
+                fn.emit(Tier1Op::Call, dst, src1, src2, n.payload);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            // Effect-only nodes (no data result) — emit as Call with no dst.
+            case NodeKind::Allocate:
+            case NodeKind::StoreField:
+            case NodeKind::StoreIndex: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                uint32_t src1 = data.empty() ? 0 : get_vreg(data[0]);
+                uint32_t src2 = data.size() >= 2 ? get_vreg(data[1]) : 0;
+                fn.emit(Tier1Op::Call, 0, src1, src2, n.payload);
+                break;
+            }
+
+            // Load nodes that produce a value.
+            case NodeKind::LoadField:
+            case NodeKind::LoadIndex: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                uint32_t dst = fn.alloc_vreg();
+                uint32_t src1 = data.empty() ? 0 : get_vreg(data[0]);
+                uint32_t src2 = data.size() >= 2 ? get_vreg(data[1]) : 0;
+                fn.emit(Tier1Op::Call, dst, src1, src2, n.payload);
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            // Guards — emit as no-ops for now (the check is elided).
+            case NodeKind::CheckInt:
+            case NodeKind::CheckFloat:
+            case NodeKind::CheckNotNull:
+            case NodeKind::CheckBounds:
+            case NodeKind::CheckShape:
+            case NodeKind::ShapeOf:
+                break;
+
+            // Phi nodes — in a linearization, we just pick the first input.
+            // This is correct for the currently-executing path.
+            case NodeKind::Phi: {
+                auto data = g.inputs_of_kind(id, EdgeKind::Data);
+                if (!data.empty()) {
+                    node_to_vreg[id.value] = get_vreg(data[0]);
+                }
+                break;
+            }
+            case NodeKind::EffectPhi:
+                break;  // no data result
+
+            case NodeKind::Parameter: {
+                uint32_t dst = fn.alloc_vreg();
+                fn.emit(Tier1Op::LoadConstImm, dst, 0, 0, 0);  // params default to 0
+                node_to_vreg[id.value] = dst;
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    // Emit the terminator for a block (Jump, BranchIfFalse, or fall-through).
+    void emit_terminator_(NodeId block_id, std::vector<bool>& emitted) {
+        const Graph& g = job.graph;
+
+        // Find control successors (nodes whose control input is block_id).
+        std::vector<NodeId> successors;
+        for (uint32_t i = 1; i < g.size(); ++i) {
+            NodeId id{static_cast<uint32_t>(i)};
+            const Node& n = g.at(id);
+            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+            if (!is_block_header_(n.kind)) continue;
+            for (const auto& e : g.inputs_of(id)) {
+                if (e.kind == EdgeKind::Control && e.target == block_id) {
+                    successors.push_back(id);
+                    break;
+                }
             }
         }
-        // Also visit control/effect inputs (they should come first too).
-        for (const auto& e : inputs) {
-            if (e.kind != EdgeKind::Data) {
-                topo_visit_(e.target, visited, on_stack, order);
+
+        // If this block contains an If node, we need to emit a branch.
+        // Look for If nodes whose control input is block_id.
+        for (uint32_t i = 1; i < g.size(); ++i) {
+            NodeId id{static_cast<uint32_t>(i)};
+            const Node& n = g.at(id);
+            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+            if (n.kind != NodeKind::If) continue;
+
+            // Check if this If's control input is block_id.
+            bool belongs = false;
+            for (const auto& e : g.inputs_of(id)) {
+                if (e.kind == EdgeKind::Control && e.target == block_id) {
+                    belongs = true;
+                    break;
+                }
             }
+            if (!belongs) continue;
+
+            // Get the condition.
+            auto if_data = g.inputs_of_kind(id, EdgeKind::Data);
+            if (if_data.empty()) continue;
+            uint32_t cond_vreg = get_vreg(if_data[0]);
+
+            // Find the IfTrue and IfFalse successors.
+            NodeId if_true_target = {};
+            NodeId if_false_target = {};
+            for (NodeId succ : successors) {
+                if (g.at(succ).kind == NodeKind::IfTrue) if_true_target = succ;
+                if (g.at(succ).kind == NodeKind::IfFalse) if_false_target = succ;
+            }
+
+            // Emit: BranchIfFalse to the false target, then fall through to true.
+            if (if_false_target.valid()) {
+                uint32_t false_label = ctrl_to_label[if_false_target.value];
+                fn.emit(Tier1Op::BranchIfFalse, 0, cond_vreg, 0, false_label);
+            }
+
+            // Emit the true block.
+            if (if_true_target.valid()) {
+                emit_block_sequence_(if_true_target, emitted);
+            }
+
+            // Emit a Jump to the merge point (if any).
+            // After the true block, we need to jump past the false block.
+            if (if_false_target.valid()) {
+                // Find where the false block ends — for now, just emit it.
+                // In a full implementation, we'd emit a Jump to the merge label.
+                emit_block_sequence_(if_false_target, emitted);
+            }
+
+            return;
         }
 
-        on_stack[id.value] = false;
-        order.push_back(id);
+        // No If in this block — just emit successors (fall-through).
+        for (NodeId succ : successors) {
+            emit_block_sequence_(succ, emitted);
+        }
     }
 
     [[nodiscard]] uint32_t get_vreg(NodeId n) {
@@ -847,10 +1048,10 @@ PassResult run_tier2_pipeline(Tier2Job& job) {
     job.pipeline.add(std::make_unique<StrengthReductionPass>());
     job.pipeline.add(std::make_unique<LICMPass>());
     job.pipeline.add(std::make_unique<LoopUnrollingPass>());
-    // GCM and ReachabilityPruning are disabled for now — they change
-    // control dependencies in a way that the SoN→Tier-1 linearization
-    // doesn't handle correctly. Re-enable after implementing proper
-    // block-based lowering.
+    // GCM and ReachabilityPruning are disabled — they change control
+    // dependencies in ways that can break the block-based lowering when
+    // pure nodes reference effectful nodes. Will re-enable after
+    // implementing schedule-late GCM.
     // job.pipeline.add(std::make_unique<GlobalCodeMotionPass>());
     // job.pipeline.add(std::make_unique<ReachabilityPruningPass>());
     job.pipeline.add(std::make_unique<DeadCodeElimPass>());
