@@ -93,9 +93,14 @@ std::string dump_node(const Graph& g, NodeId id) {
     s += node_kind_name(n.kind);
 
     // Payload in parens, if non-zero.
+    // For ConstInt/ConstFloat, show as signed (the payload is a bit-cast int64).
     if (n.payload != 0) {
         s += "(";
-        s += std::to_string(n.payload);
+        if (n.kind == NodeKind::ConstInt) {
+            s += std::to_string(static_cast<int64_t>(n.payload));
+        } else {
+            s += std::to_string(n.payload);
+        }
         s += ")";
     }
 

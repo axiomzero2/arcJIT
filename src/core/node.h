@@ -163,9 +163,13 @@ enum class TypeId : uint16_t {
 
 // --- The Node value object ---------------------------------------------------
 //
-// 24 bytes. Field order chosen so the struct packs tightly:
-//   NodeKind(2) + TypeId(2) + NodeFlags(4) + payload(4)
-//   first_input(4) + first_use(4) + input_count(2) + use_count(2)
+// 32 bytes. Field order chosen so the struct packs tightly:
+//   NodeKind(2) + TypeId(2) + NodeFlags(4) + payload(8)
+//   first_input(4) + first_use(4) + input_count(2) + use_count(2) + pad(2)
+//
+// The payload is 64 bits so ConstInt can hold full int64_t values without
+// overflow. This is critical for correct constant folding — a 32-bit payload
+// would silently truncate large intermediate results.
 //
 // Inputs come in four flavors (data, control, effect, frame-state). We store
 // them as one contiguous slice for cache locality, with per-kind offsets in
@@ -176,15 +180,16 @@ struct Node {
     NodeKind   kind;            // 2
     TypeId     type;            // 2  (placed adjacent to kind for tight packing)
     NodeFlags  flags;           // 4
-    uint32_t   payload;         // 4  — kind-specific small data (const value index, etc.)
+    uint64_t   payload;         // 8  — kind-specific data (full 64-bit const value, etc.)
 
     uint32_t   first_input;     // 4
     uint32_t   first_use;       // 4
     uint16_t   input_count;     // 2
     uint16_t   use_count;       // 2
+    uint16_t   _pad;            // 2  (keep 8-byte alignment for next node)
 };
 
-static_assert(sizeof(Node) == 24, "Node should be 24 bytes for cache friendliness");
+static_assert(sizeof(Node) == 32, "Node should be 32 bytes for cache friendliness");
 
 // --- Kind name (for IR dumps) -----------------------------------------------
 [[nodiscard]] std::string_view node_kind_name(NodeKind k) noexcept;

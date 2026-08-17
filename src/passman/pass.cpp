@@ -53,10 +53,10 @@ PassResult ConstantFoldingPass::run(Graph& g) {
         const Node& b = g.at(data_inputs[1]);
         if (a.kind != NodeKind::ConstInt || b.kind != NodeKind::ConstInt) continue;
 
-        // The payload is a uint32_t, but we interpret it as a signed int32_t
-        // when the NodeKind is ConstInt. So we need to sign-extend here.
-        int64_t av = static_cast<int64_t>(static_cast<int32_t>(a.payload));
-        int64_t bv = static_cast<int64_t>(static_cast<int32_t>(b.payload));
+        // The payload is now 64 bits, so we can fold full int64_t arithmetic
+        // without overflow concerns.
+        int64_t av = static_cast<int64_t>(a.payload);
+        int64_t bv = static_cast<int64_t>(b.payload);
         int64_t result = 0;
         switch (n.kind) {
             case NodeKind::Add: result = av + bv; break;
@@ -65,16 +65,11 @@ PassResult ConstantFoldingPass::run(Graph& g) {
             default: continue;
         }
 
-        // Only fold if the result fits in a signed 32-bit int (our payload
-        // is uint32_t). If it overflows, leave the operation unfolded —
-        // this is correct, just less optimized.
-        if (result < INT32_MIN || result > INT32_MAX) continue;
-
         // Replace this node with a new ConstInt and rewrite all uses.
         NodeId folded = g.add_node(NodeKind::ConstInt,
                                     NodeFlags::Pure | NodeFlags::CSEable | NodeFlags::GVNable,
                                     TypeId::Int,
-                                    static_cast<uint32_t>(static_cast<int32_t>(result)), {});
+                                    static_cast<uint64_t>(result), {});
         g.replace_all_uses_with(id, folded);
         g.mark_dead(id);
         r.changed = true;
@@ -91,7 +86,7 @@ PassResult GVNPass::run(Graph& g) {
     // Hash key: (kind, payload, [input IDs sorted by kind|target])
     struct Key {
         NodeKind  kind;
-        uint32_t  payload;
+        uint64_t  payload;
         uint64_t  h1, h2;  // hashes of input slices
         bool operator==(const Key& o) const noexcept {
             return kind == o.kind && payload == o.payload && h1 == o.h1 && h2 == o.h2;
@@ -280,7 +275,7 @@ PassResult StrengthReductionPass::run(Graph& g) {
         if (!is_pow2) continue;
 
         // Compute the shift amount (log2 of bv).
-        uint32_t shift_amount = 0;
+        uint64_t shift_amount = 0;
         uint64_t tmp = static_cast<uint64_t>(bv);
         while (tmp > 1) { tmp >>= 1; shift_amount++; }
 

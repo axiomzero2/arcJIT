@@ -1,0 +1,4 @@
+// graph: 3 nodes, start=n1, stop=n0
+n1 = Start  [type=Bottom, control]  ; uses=3
+n2 = Allocate(ctrl:n1, effect:n1)  [type=Object, pinned, effect]  ; uses=1
+n3 = CheckShape(data:n2, ctrl:n1)  [type=Bool, guard]  ; uses=0

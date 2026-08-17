@@ -1,0 +1,4 @@
+// graph: 3 nodes, start=n1, stop=n0
+n1 = Start  [type=Bottom, control]  ; uses=3
+n2 = Allocate(ctrl:n1, effect:n1)  [type=Object, effect]  ; uses=2
+n3 = Call(data:n2, ctrl:n1, effect:n2)  [effect]  ; uses=0

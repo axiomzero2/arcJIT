@@ -51,9 +51,7 @@ target_link_libraries(arcjit_tests PRIVATE
 )
 
 # Pass the golden test directory via env var so tests can find .ir files.
-# This must be set BEFORE gtest_discover_tests so the env var is available.
-set_target_properties(arcjit_tests PROPERTIES
+gtest_discover_tests(arcjit_tests
+    PROPERTIES
     ENVIRONMENT "ARCJIT_GOLDEN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/golden"
 )
-
-gtest_discover_tests(arcjit_tests)

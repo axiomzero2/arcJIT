@@ -84,16 +84,16 @@ enum class Tier1Op : uint8_t {
     Halt,             // stop execution
 };
 
-// A single IR instruction. 20 bytes (enum + 3-byte pad + 4×uint32).
+// A single IR instruction. 24 bytes (enum + 1-byte pad + 3×uint32 + uint64).
 struct Tier1Inst {
     Tier1Op   op;
     uint8_t   _pad[3];
     uint32_t  dst;        // destination vreg (0 = no destination)
     uint32_t  src1;       // first source vreg
     uint32_t  src2;       // second source vreg
-    uint32_t  payload;    // kind-specific data (const idx, slot, label, imm)
+    uint64_t  payload;    // kind-specific data (const idx, slot, label, imm — full 64-bit)
 };
-static_assert(sizeof(Tier1Inst) == 20);
+static_assert(sizeof(Tier1Inst) == 24);
 
 // A function in Tier-1 IR form.
 struct Tier1Function {
@@ -114,7 +114,7 @@ struct Tier1Function {
 
     // Emit an instruction.
     void emit(Tier1Op op, uint32_t dst = 0, uint32_t src1 = 0, uint32_t src2 = 0,
-              uint32_t payload = 0) {
+              uint64_t payload = 0) {
         insts.push_back({op, {0, 0, 0}, dst, src1, src2, payload});
     }
 };

@@ -223,14 +223,14 @@ Tier1Compiler::compile(const Tier1Function& fn) {
 
             case Tier1Op::LoadConstImm:
                 store_from(a, pm, inst.dst, x86::rax);
-                a.mov(x86::rax, imm(static_cast<int64_t>(static_cast<int32_t>(inst.payload))));
+                a.mov(x86::rax, imm(static_cast<int64_t>(inst.payload)));
                 store_from(a, pm, inst.dst, x86::rax);
                 break;
 
             case Tier1Op::LoadConst: {
                 // In our scaffold the "constant pool" is the locals array
                 // at index payload. We treat LoadConst as LoadConstImm for now.
-                a.mov(x86::rax, imm(static_cast<int64_t>(static_cast<int32_t>(inst.payload))));
+                a.mov(x86::rax, imm(static_cast<int64_t>(inst.payload)));
                 store_from(a, pm, inst.dst, x86::rax);
                 break;
             }
@@ -578,8 +578,8 @@ public:
                     if (idx < chunk.constants().size()) {
                         Object* c = chunk.constants()[idx];
                         if (c && c->type == ObjType::NumberInt) {
-                            int32_t v = static_cast<int32_t>(cast_to<Number>(c)->as.i);
-                            fn.emit(Tier1Op::LoadConstImm, dst, 0, 0, static_cast<uint32_t>(v));
+                            int64_t v = cast_to<Number>(c)->as.i;
+                            fn.emit(Tier1Op::LoadConstImm, dst, 0, 0, static_cast<uint64_t>(v));
                             vstack.push_back(dst);
                             break;
                         }

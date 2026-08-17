@@ -1,0 +1,5 @@
+// graph: 4 nodes, start=n1, stop=n0
+n1 = Start  [type=Bottom, control]  ; uses=1
+n2 = Loop(ctrl:n1)  [type=Bottom, control]  ; uses=1
+n3 = ConstInt(1)  [type=Int, pure]  ; uses=1
+; dead: n4 = Add(data:n3, ctrl:n2)  [type=Int, pure, dead]  ; uses=0

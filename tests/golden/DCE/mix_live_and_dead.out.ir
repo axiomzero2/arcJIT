@@ -1,0 +1,5 @@
+// graph: 4 nodes, start=n3, stop=n4
+n1 = ConstInt(1)  [type=Int, pure]  ; uses=1
+; dead: n2 = ConstInt(2)  [type=Int, pure, dead]  ; uses=0
+n3 = Start  [type=Bottom, control]  ; uses=0
+n4 = Stop(data:n1)  [type=Bottom, control]  ; uses=0

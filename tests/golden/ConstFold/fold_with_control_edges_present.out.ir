@@ -1,0 +1,7 @@
+// graph: 6 nodes, start=n1, stop=n5
+n1 = Start  [type=Bottom, control]  ; uses=2
+n2 = ConstInt(5)  [type=Int, pure, gvn]  ; uses=1
+n3 = ConstInt(10)  [type=Int, pure, gvn]  ; uses=1
+; dead: n4 = Add(data:n2, data:n3, ctrl:n1)  [type=Int, pure, gvn, commut, dead]  ; uses=0
+n5 = Stop(data:n6, ctrl:n1)  [type=Bottom, control]  ; uses=0
+n6 = ConstInt(15)  [type=Int, pure, cse, gvn]  ; uses=1

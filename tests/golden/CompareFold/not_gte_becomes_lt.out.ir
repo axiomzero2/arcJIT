@@ -1,0 +1,6 @@
+// graph: 5 nodes, start=n0, stop=n0
+n1 = Parameter  [type=Int]  ; uses=2
+n2 = Parameter(1)  [type=Int]  ; uses=2
+n3 = Gte(data:n1, data:n2)  [type=Bool, pure, gvn, commut]  ; uses=1
+; dead: n4 = Not(data:n3)  [type=Bool, pure, gvn, dead]  ; uses=0
+n5 = Lt(data:n1, data:n2)  [type=Bool, pure, gvn, commut]  ; uses=0

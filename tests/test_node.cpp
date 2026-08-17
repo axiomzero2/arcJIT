@@ -13,7 +13,7 @@ TEST(NodeTest, KindName) {
 }
 
 TEST(NodeTest, Size) {
-    EXPECT_EQ(sizeof(Node), 24);
+    EXPECT_EQ(sizeof(Node), 32);
 }
 
 TEST(NodeTest, FlagOr) {

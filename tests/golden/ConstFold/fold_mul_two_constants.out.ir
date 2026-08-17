@@ -1,0 +1,5 @@
+// graph: 4 nodes, start=n0, stop=n0
+n1 = ConstInt(4)  [type=Int, pure, gvn]  ; uses=1
+n2 = ConstInt(5)  [type=Int, pure, gvn]  ; uses=1
+; dead: n3 = Mul(data:n1, data:n2)  [type=Int, pure, gvn, commut, dead]  ; uses=0
+n4 = ConstInt(20)  [type=Int, pure, cse, gvn]  ; uses=0

@@ -63,7 +63,7 @@ public:
     // inputs. Inputs is a span of (NodeId, EdgeKind) pairs.
     //
     // Returns the new NodeId.
-    NodeId add_node(NodeKind k, NodeFlags flags, TypeId type, uint32_t payload,
+    NodeId add_node(NodeKind k, NodeFlags flags, TypeId type, uint64_t payload,
                     std::span<const std::pair<NodeId, EdgeKind>> inputs = {}) {
         const uint32_t id  = static_cast<uint32_t>(nodes_.size());
         const uint32_t eid = static_cast<uint32_t>(edges_.size());

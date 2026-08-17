@@ -29,14 +29,12 @@ static Object* make_fuzz_const(int64_t v) {
     fc.seed = seed;
     Rng rng(seed);
 
-    // Generate 2-5 constants in range [-20, 20].
-    // We use small constants to avoid intermediate overflow in ConstFold
-    // (which uses 32-bit payloads). With max 5 constants of magnitude ≤20
-    // and max 8 multiplications, the worst case is 20^8 ≈ 2.5e10, which
-    // exceeds 32-bit range. So we further limit to [-10, 10] for safety.
+    // Generate 2-5 constants in range [-100, 100].
+    // With 64-bit payloads, we can use full int64 arithmetic without
+    // overflow concerns (100^8 ≈ 1e16, well within int64 range).
     size_t num_consts = static_cast<size_t>(rng.next_int(2, 5));
     for (size_t i = 0; i < num_consts; ++i) {
-        fc.constants.push_back(rng.next_int(-10, 10));
+        fc.constants.push_back(rng.next_int(-100, 100));
     }
 
     // Build the chunk.

@@ -1,0 +1,10 @@
+// graph: 9 nodes, start=n1, stop=n0
+n1 = Start  [type=Bottom, control]  ; uses=2
+n2 = ConstInt(1)  [type=Int, pure]  ; uses=1
+n3 = If(data:n2, ctrl:n1)  [type=Bottom, control]  ; uses=2
+n4 = IfTrue(ctrl:n3)  [type=Bottom, control]  ; uses=0
+; dead: n5 = IfFalse(ctrl:n3)  [type=Bottom, control, dead]  ; uses=0
+n6 = ConstInt  [type=Int, pure]  ; uses=1
+n7 = If(data:n6, ctrl:n1)  [type=Bottom, control]  ; uses=2
+; dead: n8 = IfTrue(ctrl:n7)  [type=Bottom, control, dead]  ; uses=0
+n9 = IfFalse(ctrl:n7)  [type=Bottom, control]  ; uses=0
