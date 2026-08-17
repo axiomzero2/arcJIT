@@ -311,7 +311,7 @@ Runtime::osr_to_tier2(const Chunk& chunk, void* locals_base) {
         std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
     std::string out;
-    out += std::format("Tier-2 demo pipeline finished:\n");
+    out += std::format("Surge (Gigavolt) demo pipeline finished:\n");
     out += std::format("  changed        : {}\n", r.changed);
     out += std::format("  nodes removed  : {}\n", r.nodes_removed);
     out += std::format("  nodes added    : {}\n", r.nodes_added);

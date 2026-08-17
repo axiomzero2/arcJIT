@@ -54,7 +54,15 @@ lower_son_to_tier1(const Tier2Job& job);
 void build_demo_graph(Graph& g);
 
 // Run the full Tier-2 pipeline on a graph.
+// This is the Gigavolt optimization pipeline — 14 passes:
+//   TypeNarrow → CallInline → EscapeAnalysis → GVN → ConstFold →
+//   AlgebraicSimp → CompareFold → BranchFold → StrengthReduce →
+//   LICM → LoopUnroll → BCE → ReachabilityPruning → DCE
 PassResult run_tier2_pipeline(Tier2Job& job);
+
+// Build the Gigavolt pipeline (the named optimization pipeline for Surge).
+// Returns a PassPipeline with all passes added in order.
+[[nodiscard]] PassPipeline build_gigavolt_pipeline();
 
 // End-to-end: lower + optimize + lower-back + emit + execute.
 // This is what the runtime calls to compile a Tier1Function at Tier 2.

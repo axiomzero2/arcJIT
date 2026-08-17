@@ -101,23 +101,24 @@ The JIT must preserve the **copy-on-load semantics** Arc uses: `LOAD_CONST` / `L
 The industry-standard layered approach (V8: Ignition → Sparkplug → Maglev → TurboFan; HotSpot: Interpreter → C1 → C2). Skipping directly from interpreter to Sea-of-Nodes creates a "compilation cliff" — the SoN compiler is heavy; if a function gets hot, the app will stutter while the SoN graph is built, optimized, and register-allocated.
 
 ```
-Arc Chunk ──► Tier 0 (Interpreter)
+Arc Chunk ──► Spark   (Tier 0 — register interpreter)
                 │  + inline caches (ICs)
                 │  + type feedback vectors (TFVs)
                 │  + invocation / branch counters
                 │  + safepoint polling
                 ▼
-            Tier 1 (Baseline SSA JIT)
+            Jolt    (Tier 1 — baseline SSA JIT)
                 │  fast Linear-Scan regalloc
                 │  monomorphic IC stubs
                 │  profiling traps
                 ▼
-            Tier 2 (Sea of Nodes JIT)
+            Surge   (Tier 2 — Sea of Nodes JIT)
+                   Gigavolt pipeline:
                    GVN, escape analysis,
-                   global code motion, OSR
+                   LICM, BCE, GCM, OSR
 ```
 
-### 1.1 Tier 0 — Register-style interpreter over Arc's stack bytecode
+### 1.1 Spark (Tier 0) — Register-style interpreter over Arc's stack bytecode
 
 - **Input**: Arc `Chunk` (stack bytecode).
 - **Goal**: zero compilation latency, fast startup, profile collection.
@@ -127,9 +128,9 @@ Arc Chunk ──► Tier 0 (Interpreter)
   - Maintains invocation and branch-taken counters.
   - Fast paths must match Arc's `vmRun()` fast paths exactly: `INT+INT` arithmetic inlined, `JUMP_IF_FALSE` on `VAL_INT` inlined.
 
-### 1.2 Tier 1 — Baseline SSA JIT
+### 1.2 Jolt (Tier 1) — Baseline SSA JIT
 
-- **Input**: hot `Chunk` + Tier-0 profiles.
+- **Input**: hot `Chunk` + Spark profiles.
 - **IR**: standard CFG in SSA form.
 - **Goal**: eliminate interpreter dispatch overhead in milliseconds. Provide a stable baseline execution speed while Tier 2 compiles.
 - **Mechanics**:
@@ -138,9 +139,9 @@ Arc Chunk ──► Tier 0 (Interpreter)
   - **Monomorphic IC stubs** — for `PROPERTY_ACCESS`, `INDEX_GET`, `CALL`: emit a stub that checks the observed shape and fast-paths the common case; falls back to a C++ runtime call to update the IC on miss.
   - **Profiling traps** — inject lightweight counters to gather exact branch-taken frequencies for Tier 2.
 
-### 1.3 Tier 2 — Sea of Nodes optimizing JIT
+### 1.3 Surge (Tier 2) — Sea of Nodes optimizing JIT (Gigavolt pipeline)
 
-- **Input**: Tier-1 SSA graph + exact profiles gathered during Tier-1 execution.
+- **Input**: Jolt SSA graph + exact profiles gathered during Jolt execution.
 - **IR**: Sea of Nodes — combined data-dependency graph and control-dependence graph.
 - **Goal**: maximum throughput on hot paths.
 - **Mechanics**:

@@ -32,20 +32,25 @@ using namespace arcjit;
 static void print_help() {
     std::println("arcJIT — a 3-tier JIT for the Arc programming language");
     std::println("");
+    std::println("Tiers:");
+    std::println("  0 = Spark   — register interpreter");
+    std::println("  1 = Jolt    — baseline SSA JIT");
+    std::println("  2 = Surge   — optimizing Sea of Nodes JIT (Gigavolt pipeline)");
+    std::println("");
     std::println("USAGE:");
     std::println("  arcjit-cli --tier <0|1|2> --bytecode <spec>");
-    std::println("  arcjit-cli --demo tier1");
-    std::println("  arcjit-cli --demo tier2");
+    std::println("  arcjit-cli --demo jolt");
+    std::println("  arcjit-cli --demo surge");
     std::println("  arcjit-cli --bench <tier>");
     std::println("  arcjit-cli --version");
     std::println("  arcjit-cli --help");
     std::println("");
     std::println("OPTIONS:");
     std::println("  --tier <n>      Run the bytecode at the given tier");
-    std::println("                  0 = interpreter, 1 = baseline SSA JIT, 2 = Sea of Nodes");
+    std::println("                  0=Spark, 1=Jolt, 2=Surge");
     std::println("  --bytecode <s>  Bytecode spec (e.g. '1+2+3', '(10+20)*3')");
-    std::println("  --demo <id>     Run a synthetic demo (tier1 or tier2)");
-    std::println("  --bench <tier>  Run a 1000-iteration benchmark at the given tier");
+    std::println("  --demo <id>     Run a synthetic demo (jolt or surge)");
+    std::println("  --bench <tier>  Run a 10000-iteration benchmark at the given tier");
     std::println("  --version       Print version and exit");
     std::println("  --help          Print this message and exit");
 }
@@ -161,10 +166,7 @@ static int run_bench(Runtime& rt, Tier tier) {
     auto t1 = std::chrono::high_resolution_clock::now();
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
-    const char* tier_name = tier == Tier::Interpreter ? "interpreter"
-                           : tier == Tier::Tier1Baseline ? "tier-1"
-                           : "tier-2";
-    std::println("Benchmark ({} x {}):", tier_name, N);
+    std::println("Benchmark ({} x {}):", tier_name(tier), N);
     std::println("  result: {}", result);
     std::println("  total:  {} us", us);
     std::println("  per op: {} ns", us * 1000 / N);
@@ -184,18 +186,18 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (arg1 == "--version") {
-        std::println("arcJIT v0.2.0 (C++23, 3-tier JIT)");
+        std::println("arcJIT v0.3.0 (C++23, Spark/Jolt/Surge)");
         return 0;
     }
     if (arg1 == "--demo") {
         if (argc < 3) {
-            std::println(stderr, "error: --demo requires an argument (tier1 or tier2)");
+            std::println(stderr, "error: --demo requires an argument (jolt or surge)");
             return 1;
         }
         std::string_view which = argv[2];
         Runtime rt;
-        if (which == "tier1") return run_tier1_demo(rt);
-        if (which == "tier2") return run_tier2_demo(rt);
+        if (which == "jolt" || which == "tier1") return run_tier1_demo(rt);
+        if (which == "surge" || which == "tier2") return run_tier2_demo(rt);
         std::println(stderr, "error: unknown demo '{}'", which);
         return 1;
     }

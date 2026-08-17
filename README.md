@@ -7,16 +7,16 @@ A 3-tier JIT compiler for the [Arc programming language](https://github.com/Vxid
 arcJIT is a just-in-time compiler that takes Arc's existing stack bytecode (the same bytecode produced by the upstream Arc compiler) and executes it through a layered pipeline:
 
 ```
-Arc Chunk ──► Tier 0  (interpreter, profiling, ICs)
+Arc Chunk ──► Spark   (Tier 0 — register interpreter, profiling, ICs)
                 │
                 ▼
-            Tier 1  (baseline SSA JIT, linear scan regalloc)
+            Jolt    (Tier 1 — baseline SSA JIT, linear scan regalloc)
                 │
                 ▼
-            Tier 2  (Sea of Nodes optimizing JIT, GVN + escape analysis + GCM)
+            Surge   (Tier 2 — Sea of Nodes optimizing JIT, Gigavolt pipeline)
 ```
 
-The architecture is the same one used by V8 (Ignition → Sparkplug → TurboFan) and HotSpot (Interpreter → C1 → C2). Tier 0 is always available and gives zero startup latency. Tier 1 is fast to compile and gives a stable baseline while Tier 2 is being prepared. Tier 2 is the heavy optimizing compiler that produces peak throughput.
+The architecture is the same one used by V8 (Ignition → Sparkplug → TurboFan) and HotSpot (Interpreter → C1 → C2). Spark is always available and gives zero startup latency. Jolt is fast to compile and gives a stable baseline while Surge is being prepared. Surge is the heavy optimizing compiler that produces peak throughput.
 
 ## Status
 
@@ -47,13 +47,14 @@ optimizing JIT, with background compilation via enkiTS and OSR support.
 | Thread pools (enkiTS)              | wired             |
 | End-to-end CLI                     | working           |
 
-**229 tests passing.** Verified end-to-end:
-- `arcjit-cli --tier 0 --bytecode "1+2+3"` → 6 (interpreter)
-- `arcjit-cli --tier 1 --bytecode "1+2+3"` → 6 (Tier-1 JIT)
-- `arcjit-cli --tier 2 --bytecode "1+2+3"` → 6 (Tier-2 SoN JIT, GVN+ConstFold fold to ConstInt(6))
+**251 tests passing.** Verified end-to-end:
+- `arcjit-cli --tier 0 --bytecode "1+2+3"` → 6 (Spark interpreter)
+- `arcjit-cli --tier 1 --bytecode "1+2+3"` → 6 (Jolt baseline JIT)
+- `arcjit-cli --tier 2 --bytecode "1+2+3"` → 6 (Surge Gigavolt pipeline folds to ConstInt(6))
 - `arcjit-cli --tier 0 --bytecode "(10+20)*3"` → 90 (all three tiers agree)
+- 960,000+ random fuzz cases pass across all tiers
 
-### Optimization passes (Tier-2 pipeline)
+### Optimization passes (Surge / Gigavolt pipeline)
 
 | Pass | Transformations | Golden tests |
 | --- | --- | --- |
@@ -122,9 +123,9 @@ ctest --test-dir build
 
 ```bash
 # Run a bytecode spec at a specific tier
-./build/arcjit-cli --tier 0 --bytecode "1+2+3"      # interpreter
-./build/arcjit-cli --tier 1 --bytecode "1+2+3"      # Tier-1 baseline SSA JIT
-./build/arcjit-cli --tier 2 --bytecode "1+2+3"      # Tier-2 Sea of Nodes JIT
+./build/arcjit-cli --tier 0 --bytecode "1+2+3"      # Spark (interpreter)
+./build/arcjit-cli --tier 1 --bytecode "1+2+3"      # Jolt (baseline SSA JIT)
+./build/arcjit-cli --tier 2 --bytecode "1+2+3"      # Surge (Gigavolt pipeline)
 
 # Run a 10000-iteration benchmark at a tier
 ./build/arcjit-cli --bench 0
@@ -132,8 +133,8 @@ ctest --test-dir build
 ./build/arcjit-cli --bench 2
 
 # Run synthetic demos
-./build/arcjit-cli --demo tier1                      # 1+2+3 via asmjit-emitted x86-64
-./build/arcjit-cli --demo tier2                      # SoN pipeline + Graphviz dump
+./build/arcjit-cli --demo jolt                       # 1+2+3 via asmjit-emitted x86-64
+./build/arcjit-cli --demo surge                      # Gigavolt pipeline + Graphviz dump
 ```
 
 ## Design rules

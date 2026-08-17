@@ -1021,41 +1021,54 @@ void build_demo_graph(Graph& g) {
     g.set_stop(stop);
 }
 
+// ============================================================================
+// Gigavolt — the Surge optimizing pipeline
+// ============================================================================
+//
+// Named pipeline for the Tier-2 (Surge) Sea of Nodes optimizer.
+// 14 passes run to a fixpoint (max 8 iterations):
+//
+//   1. TypeNarrow     — propagate TypeIds (Int, Float, Bool, etc.)
+//   2. CallInline     — mark calls to known functions
+//   3. EscapeAnalysis — mark non-escaping allocations
+//   4. GVN            — global value numbering (deduplicate)
+//   5. ConstFold      — fold ConstInt + ConstInt → ConstInt
+//   6. AlgebraicSimp  — x+0→x, x*1→x, x*0→0, x-x→0, !!x→x
+//   7. CompareFold    — x==x→true, !(x<y)→x>=y
+//   8. BranchFold     — if(true)→drop false branch
+//   9. StrengthReduce — x*2^k → x<<k
+//  10. LICM           — hoist loop-invariant code (uses dominance)
+//  11. LoopUnroll     — unroll hot loops (placeholder)
+//  12. BCE            — remove provably-unnecessary bounds checks
+//  13. ReachPrune     — remove unreachable nodes
+//  14. DCE            — remove dead pure nodes
+//
+// GCM (schedule-late) is implemented but disabled — it creates new nodes
+// with control edges that the block-based lowering doesn't handle yet.
+
+[[nodiscard]] PassPipeline build_gigavolt_pipeline() {
+    PassPipeline pipe;
+    pipe.add(std::make_unique<TypeNarrowingPass>());
+    pipe.add(std::make_unique<CallInliningPass>());
+    pipe.add(std::make_unique<EscapeAnalysisPass>());
+    pipe.add(std::make_unique<GVNPass>());
+    pipe.add(std::make_unique<ConstantFoldingPass>());
+    pipe.add(std::make_unique<AlgebraicSimplificationPass>());
+    pipe.add(std::make_unique<ComparisonFoldingPass>());
+    pipe.add(std::make_unique<BranchFoldingPass>());
+    pipe.add(std::make_unique<StrengthReductionPass>());
+    pipe.add(std::make_unique<LICMPass>());
+    pipe.add(std::make_unique<LoopUnrollingPass>());
+    // GCM disabled — see comment above.
+    // pipe.add(std::make_unique<GlobalCodeMotionPass>());
+    pipe.add(std::make_unique<BoundsCheckEliminationPass>());
+    pipe.add(std::make_unique<ReachabilityPruningPass>());
+    pipe.add(std::make_unique<DeadCodeElimPass>());
+    return pipe;
+}
+
 PassResult run_tier2_pipeline(Tier2Job& job) {
-    // Pipeline order matters:
-    //   1. TypeNarrowing — establish types first (other passes use them)
-    //   2. CallInlining — mark known calls (enables other optimizations)
-    //   3. EscapeAnalysis — mark non-escaping allocations
-    //   4. GVN — deduplicate before other passes can create dupes
-    //   5. ConstantFolding — fold constants
-    //   6. AlgebraicSimplification — simplify identities
-    //   7. ComparisonFolding — fold comparisons
-    //   8. BranchFolding — fold constant branches
-    //   9. StrengthReduction — replace expensive ops with shifts
-    //  10. LICM — hoist loop-invariant code (uses dominance)
-    //  11. LoopUnrolling — unroll hot loops
-    //  12. GlobalCodeMotion — schedule early (hide latency)
-    //  13. ReachabilityPruning — remove unreachable nodes
-    //  14. DCE — clean up dead pure nodes
-    job.pipeline.add(std::make_unique<TypeNarrowingPass>());
-    job.pipeline.add(std::make_unique<CallInliningPass>());
-    job.pipeline.add(std::make_unique<EscapeAnalysisPass>());
-    job.pipeline.add(std::make_unique<GVNPass>());
-    job.pipeline.add(std::make_unique<ConstantFoldingPass>());
-    job.pipeline.add(std::make_unique<AlgebraicSimplificationPass>());
-    job.pipeline.add(std::make_unique<ComparisonFoldingPass>());
-    job.pipeline.add(std::make_unique<BranchFoldingPass>());
-    job.pipeline.add(std::make_unique<StrengthReductionPass>());
-    job.pipeline.add(std::make_unique<LICMPass>());
-    job.pipeline.add(std::make_unique<LoopUnrollingPass>());
-    // GCM is disabled — schedule-late creates new nodes with control edges,
-    // which interacts poorly with the block-based lowering's Phase 1b check
-    // for control-free pure nodes. Will re-enable after refactoring the
-    // lowering to handle GCM-modified graphs correctly.
-    // job.pipeline.add(std::make_unique<GlobalCodeMotionPass>());
-    job.pipeline.add(std::make_unique<BoundsCheckEliminationPass>());
-    job.pipeline.add(std::make_unique<ReachabilityPruningPass>());
-    job.pipeline.add(std::make_unique<DeadCodeElimPass>());
+    job.pipeline = build_gigavolt_pipeline();
     return job.pipeline.run_to_fixpoint(job.graph, 8);
 }
 

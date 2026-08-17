@@ -46,6 +46,22 @@ enum class Tier : uint8_t {
     Tier2Optimizing,
 };
 
+// Tier names (used in logs, CLI output, stats).
+//   Tier 0: Spark  — register interpreter
+//   Tier 1: Jolt   — baseline SSA JIT
+//   Tier 2: Surge  — optimizing Sea of Nodes JIT (Gigavolt pipeline)
+[[nodiscard]] inline std::string_view tier_name(Tier t) noexcept {
+    switch (t) {
+        case Tier::Interpreter:    return "Spark";
+        case Tier::Tier1Baseline:  return "Jolt";
+        case Tier::Tier2Optimizing: return "Surge";
+    }
+    return "unknown";
+}
+
+// The Surge optimizing pipeline is called Gigavolt.
+inline constexpr std::string_view kGigavoltPipelineName = "Gigavolt";
+
 struct CompilationStats {
     std::atomic<uint64_t> interp_invocations   {0};
     std::atomic<uint64_t> tier1_invocations    {0};
