@@ -66,16 +66,13 @@ TEST(Tier2BranchBug, minimal_reproducer_if_else_returns_correct_value) {
     ASSERT_TRUE(r1.has_value()) << r1.error();
     EXPECT_EQ(r1->as_int(), 10);
 
-    // Tier-2 currently FAILS — this is the known bug.
-    // Document the expected (correct) behavior; when the bug is fixed,
-    // this assertion will pass.
+    // Tier-2 now falls back to Tier-1 compilation for branchy functions,
+    // so it produces the correct value.
     auto r2 = rt.run_at_tier(c, Tier::Tier2Optimizing);
-    if (r2.has_value()) {
-        // TODO: When the SoN lowering models Region/Phi, this should be 10.
-        // For now, we document the bug by checking the (incorrect) value.
-        EXPECT_EQ(r2->as_int(), 5)
-            << "Tier-2 branch bug: expected 5 (known wrong value) until Region/Phi is implemented";
-    }
+    ASSERT_TRUE(r2.has_value()) << r2.error();
+    EXPECT_EQ(r2->as_int(), 10)
+        << "Tier-2 should produce the correct value for branchy functions "
+        << "(via Tier-1 fallback when SoN can't handle branches)";
 }
 
 // 2. VARIANT TRIGGER
@@ -110,6 +107,11 @@ TEST(Tier2BranchBug, variant_trigger_false_condition_returns_else_value) {
     auto r1 = rt.run_at_tier(c, Tier::Tier1Baseline);
     ASSERT_TRUE(r1.has_value());
     EXPECT_EQ(r1->as_int(), 7);
+
+    // Tier-2 falls back to Tier-1 for branchy functions — produces correct value.
+    auto r2 = rt.run_at_tier(c, Tier::Tier2Optimizing);
+    ASSERT_TRUE(r2.has_value()) << r2.error();
+    EXPECT_EQ(r2->as_int(), 7);
 }
 
 // 3. BOUNDARY/NEGATIVE CASE
@@ -174,6 +176,11 @@ TEST(Tier2BranchBug, integration_branch_inside_arithmetic_sequence) {
     auto r1 = rt.run_at_tier(c, Tier::Tier1Baseline);
     ASSERT_TRUE(r1.has_value());
     EXPECT_EQ(r1->as_int(), 30);
+
+    // Tier-2 falls back to Tier-1 for branchy functions.
+    auto r2 = rt.run_at_tier(c, Tier::Tier2Optimizing);
+    ASSERT_TRUE(r2.has_value()) << r2.error();
+    EXPECT_EQ(r2->as_int(), 30);
 }
 
 // 5. DEOPT/STATE RECONSTRUCTION (reference check)

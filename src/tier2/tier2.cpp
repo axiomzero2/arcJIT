@@ -28,6 +28,20 @@ public:
     // The current effect node (last effectful op).
     NodeId current_effect;
 
+    // Pending control-flow edges that target each label ID.
+    // When we encounter a Label, we create a Region node merging all
+    // pending predecessors. This is how branch merge points are modeled.
+    std::unordered_map<uint32_t, std::vector<NodeId>> pending_label_preds;
+
+    // Pending effect edges that target each label ID (for effect chain
+    // continuity across branches).
+    std::unordered_map<uint32_t, std::vector<NodeId>> pending_label_effects;
+
+    // Collected Stop nodes — if there are multiple Returns, we merge them
+    // into a single Stop with a Phi for the return value.
+    std::vector<NodeId> stop_nodes;
+    std::vector<NodeId> return_values;
+
     explicit Tier1ToSoN(const Tier1Function& f, Graph& graph)
         : fn(f), g(graph) {}
 
@@ -41,23 +55,50 @@ public:
         // Initial effect = Start.
         current_effect = current_control;
 
-        // Pre-create a label-ID → control-node map. We bind labels as we
-        // encounter them.
-        std::unordered_map<uint32_t, NodeId> label_to_control;
-
         for (const auto& inst : fn.insts) {
             switch (inst.op) {
                 case Tier1Op::Label: {
-                    // A Label marks a basic-block boundary. We create a
-                    // Region node (which will later be merged with the
-                    // incoming control flow by GCM).
-                    auto region = g.add_node(NodeKind::Region,
-                                              NodeFlags::IsControl,
-                                              TypeId::Bottom, 0,
-                                              std::initializer_list<std::pair<NodeId, EdgeKind>>{
-                                                  {current_control, EdgeKind::Control}});
-                    label_to_control[inst.payload] = region;
-                    current_control = region;
+                    // A Label marks a basic-block boundary. Collect all
+                    // pending predecessors (from Jump/BranchIfFalse that
+                    // target this label) plus the fall-through control (if
+                    // any — the previous block didn't end with an explicit
+                    // jump).
+                    auto& preds = pending_label_preds[inst.payload];
+                    auto& effects = pending_label_effects[inst.payload];
+
+                    // If current_control is valid and wasn't already added
+                    // as a predecessor (i.e., the previous block fell through
+                    // without a Jump), add it.
+                    if (current_control.valid()) {
+                        preds.push_back(current_control);
+                        effects.push_back(current_effect);
+                    }
+
+                    if (preds.size() == 1) {
+                        // Single predecessor — no Region needed, just use
+                        // the predecessor directly.
+                        current_control = preds[0];
+                        current_effect  = effects[0];
+                    } else {
+                        // Multiple predecessors — create a Region node.
+                        std::vector<std::pair<NodeId, EdgeKind>> ctrl_inputs;
+                        for (auto p : preds) {
+                            ctrl_inputs.push_back({p, EdgeKind::Control});
+                        }
+                        current_control = g.add_node(NodeKind::Region,
+                                                      NodeFlags::IsControl,
+                                                      TypeId::Bottom, 0, ctrl_inputs);
+                        // For the effect chain, create an EffectPhi that
+                        // merges the incoming effects.
+                        std::vector<std::pair<NodeId, EdgeKind>> eff_inputs;
+                        eff_inputs.push_back({current_control, EdgeKind::Control});
+                        for (auto e : effects) {
+                            eff_inputs.push_back({e, EdgeKind::Effect});
+                        }
+                        current_effect = g.add_node(NodeKind::EffectPhi,
+                                                     NodeFlags::IsEffect,
+                                                     TypeId::Bottom, 0, eff_inputs);
+                    }
                     break;
                 }
 
@@ -270,23 +311,32 @@ public:
                     auto stop = g.add_node(NodeKind::Stop,
                                             NodeFlags::IsControl | NodeFlags::NoDeopt,
                                             TypeId::Bottom, 0, inputs);
-                    g.set_stop(stop);
+                    // Collect all Stop nodes so we can merge them at the end.
+                    stop_nodes.push_back(stop);
+                    return_values.push_back(v);
+                    // After Return, control is dead (unreachable).
+                    current_control = NodeId{};
+                    current_effect  = NodeId{};
                     break;
                 }
 
                 case Tier1Op::Jump: {
-                    // Jumps create control-flow. For the scaffold we model
-                    // this as a successor Region (resolved when we hit the
-                    // target Label).
-                    // We can't bind the target yet (it may be forward), so
-                    // just remember the pending jump.
-                    // For now we treat Jump as a no-op on control flow (the
-                    // Label handler will create a fresh Region).
+                    // Unconditional jump — add current control as a pending
+                    // predecessor of the target label, then mark current
+                    // control as dead (no fall-through).
+                    pending_label_preds[inst.payload].push_back(current_control);
+                    pending_label_effects[inst.payload].push_back(current_effect);
+                    current_control = NodeId{};
+                    current_effect  = NodeId{};
                     break;
                 }
                 case Tier1Op::BranchIfFalse:
                 case Tier1Op::BranchIfTrue: {
-                    // Model as an If node with two successors (IfTrue, IfFalse).
+                    // Branch creates an If node with two successors.
+                    // BranchIfFalse: "jump to target if cond is false;
+                    //                 fall through if true"
+                    // BranchIfTrue:  "jump to target if cond is true;
+                    //                 fall through if false"
                     NodeId cond = lookup_vreg(inst.src1);
                     std::pair<NodeId, EdgeKind> inputs[] = {
                         {cond, EdgeKind::Data},
@@ -305,9 +355,19 @@ public:
                                                 TypeId::Bottom, 0,
                                                 std::initializer_list<std::pair<NodeId, EdgeKind>>{
                                                     {if_node, EdgeKind::Control}});
-                    // For Tier-1 lowering we'll need both. For now pick the
-                    // appropriate successor as the new current_control.
-                    current_control = (inst.op == Tier1Op::BranchIfTrue) ? if_true : if_false;
+
+                    if (inst.op == Tier1Op::BranchIfFalse) {
+                        // Jump target gets the false branch; fall-through is true.
+                        pending_label_preds[inst.payload].push_back(if_false);
+                        pending_label_effects[inst.payload].push_back(current_effect);
+                        current_control = if_true;
+                        // Effect stays the same on the fall-through path.
+                    } else {
+                        // BranchIfTrue: jump target gets the true branch; fall-through is false.
+                        pending_label_preds[inst.payload].push_back(if_true);
+                        pending_label_effects[inst.payload].push_back(current_effect);
+                        current_control = if_false;
+                    }
                     break;
                 }
 
@@ -319,14 +379,18 @@ public:
                     auto stop = g.add_node(NodeKind::Stop,
                                             NodeFlags::IsControl | NodeFlags::NoDeopt,
                                             TypeId::Bottom, 0, inputs);
-                    if (!g.stop().valid()) g.set_stop(stop);
+                    stop_nodes.push_back(stop);
+                    return_values.push_back(NodeId{});  // no return value for Halt
+                    current_control = NodeId{};
+                    current_effect  = NodeId{};
                     break;
                 }
             }
         }
 
-        if (!g.stop().valid()) {
-            // Synthesize a Stop node if the function didn't end with Return/Halt.
+        // Merge multiple Stop nodes into one.
+        if (stop_nodes.empty()) {
+            // No explicit Return/Halt — synthesize a Stop.
             std::pair<NodeId, EdgeKind> inputs[] = {
                 {current_control, EdgeKind::Control},
                 {current_effect, EdgeKind::Effect},
@@ -334,6 +398,65 @@ public:
             g.set_stop(g.add_node(NodeKind::Stop,
                                    NodeFlags::IsControl | NodeFlags::NoDeopt,
                                    TypeId::Bottom, 0, inputs));
+        } else if (stop_nodes.size() == 1) {
+            g.set_stop(stop_nodes[0]);
+        } else {
+            // Multiple Stop nodes — create a merged Stop.
+            // The merged Stop has a Phi for the return value (if all paths
+            // return a value) and a Region merging the control inputs.
+            std::vector<std::pair<NodeId, EdgeKind>> region_inputs;
+            std::vector<std::pair<NodeId, EdgeKind>> phi_inputs;
+            std::vector<NodeId> control_preds;
+
+            for (size_t i = 0; i < stop_nodes.size(); ++i) {
+                // Each Stop's control input is the predecessor we want to merge.
+                auto stop_data = g.inputs_of_kind(stop_nodes[i], EdgeKind::Data);
+                auto stop_ctrl = g.inputs_of_kind(stop_nodes[i], EdgeKind::Control);
+                if (!stop_ctrl.empty()) {
+                    control_preds.push_back(stop_ctrl[0]);
+                    region_inputs.push_back({stop_ctrl[0], EdgeKind::Control});
+                    if (!stop_data.empty() && stop_data[0].valid()) {
+                        phi_inputs.push_back({stop_data[0], EdgeKind::Data});
+                    } else {
+                        // Insert a null placeholder for paths without a return value.
+                        NodeId zero = g.add_node(NodeKind::ConstInt,
+                                                  NodeFlags::Pure | NodeFlags::GVNable,
+                                                  TypeId::Int, 0, {});
+                        phi_inputs.push_back({zero, EdgeKind::Data});
+                    }
+                }
+            }
+
+            NodeId region = g.add_node(NodeKind::Region, NodeFlags::IsControl,
+                                        TypeId::Bottom, 0, region_inputs);
+
+            // Create a Phi for the return value.
+            std::vector<std::pair<NodeId, EdgeKind>> phi_with_ctrl;
+            phi_with_ctrl.push_back({region, EdgeKind::Control});
+            for (auto& p : phi_inputs) phi_with_ctrl.push_back(p);
+            NodeId phi = g.add_node(NodeKind::Phi, NodeFlags::None, TypeId::Int, 0,
+                                     phi_with_ctrl);
+
+            // Merge effects too — collect all effect inputs.
+            std::vector<std::pair<NodeId, EdgeKind>> eff_phi_inputs;
+            eff_phi_inputs.push_back({region, EdgeKind::Control});
+            for (size_t i = 0; i < stop_nodes.size(); ++i) {
+                auto stop_eff = g.inputs_of_kind(stop_nodes[i], EdgeKind::Effect);
+                if (!stop_eff.empty()) {
+                    eff_phi_inputs.push_back({stop_eff[0], EdgeKind::Effect});
+                }
+            }
+            NodeId eff_phi = g.add_node(NodeKind::EffectPhi, NodeFlags::IsEffect,
+                                         TypeId::Bottom, 0, eff_phi_inputs);
+
+            std::pair<NodeId, EdgeKind> stop_inputs[] = {
+                {phi, EdgeKind::Data},
+                {region, EdgeKind::Control},
+                {eff_phi, EdgeKind::Effect},
+            };
+            g.set_stop(g.add_node(NodeKind::Stop,
+                                   NodeFlags::IsControl | NodeFlags::NoDeopt,
+                                   TypeId::Bottom, 0, stop_inputs));
         }
 
         return {};
@@ -619,14 +742,52 @@ void build_demo_graph(Graph& g) {
 }
 
 PassResult run_tier2_pipeline(Tier2Job& job) {
+    // Pipeline order matters:
+    //   1. TypeNarrowing — establish types first (other passes use them)
+    //   2. GVN — deduplicate before other passes can create dupes
+    //   3. ConstantFolding — fold constants
+    //   4. AlgebraicSimplification — simplify identities
+    //   5. ComparisonFolding — fold comparisons
+    //   6. BranchFolding — fold constant branches
+    //   7. StrengthReduction — replace expensive ops (future)
+    //   8. DCE — clean up dead nodes
+    job.pipeline.add(std::make_unique<TypeNarrowingPass>());
     job.pipeline.add(std::make_unique<GVNPass>());
     job.pipeline.add(std::make_unique<ConstantFoldingPass>());
+    job.pipeline.add(std::make_unique<AlgebraicSimplificationPass>());
+    job.pipeline.add(std::make_unique<ComparisonFoldingPass>());
+    job.pipeline.add(std::make_unique<BranchFoldingPass>());
+    job.pipeline.add(std::make_unique<StrengthReductionPass>());
     job.pipeline.add(std::make_unique<DeadCodeElimPass>());
     return job.pipeline.run_to_fixpoint(job.graph, 8);
 }
 
 [[nodiscard]] std::expected<int64_t (*)(void*), std::string>
 compile_at_tier2(const Tier1Function& fn) {
+    // Check if the function has branches. If it does, the SoN→Tier-1
+    // linearization can't correctly reconstruct the control flow, so we
+    // fall back to Tier-1 compilation (no SoN optimization).
+    //
+    // This is a known limitation — full GCM with proper Region/Phi handling
+    // in the back-end lowering is future work. Linear functions are fully
+    // optimized at Tier-2.
+    bool has_branches = false;
+    for (const auto& inst : fn.insts) {
+        if (inst.op == Tier1Op::BranchIfFalse ||
+            inst.op == Tier1Op::BranchIfTrue ||
+            inst.op == Tier1Op::Jump) {
+            has_branches = true;
+            break;
+        }
+    }
+
+    if (has_branches) {
+        // Fall back to Tier-1 compilation for branchy functions.
+        static thread_local std::unique_ptr<Tier1Compiler> tls_compiler;
+        if (!tls_compiler) tls_compiler = std::make_unique<Tier1Compiler>();
+        return tls_compiler->compile(fn);
+    }
+
     Tier2Job job;
     job.function_name = fn.name;
 

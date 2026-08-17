@@ -29,6 +29,10 @@ add_executable(arcjit_tests
     golden/test_golden_gvn.cpp
     golden/test_golden_constfold.cpp
     golden/test_golden_dce.cpp
+    golden/test_golden_algebraic_simp.cpp
+    golden/test_golden_compare_fold.cpp
+    golden/test_golden_branch_fold.cpp
+    golden/test_golden_type_narrow.cpp
     test_rule36_branch_bug.cpp
     test_replay.cpp
     test_instrumentation.cpp

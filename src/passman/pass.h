@@ -125,4 +125,39 @@ public:
     PassResult run(Graph& g) override;
 };
 
+// Algebraic simplification — x+0→x, x*1→x, x*0→0, x-0→x, x-x→0, !!x→x.
+class AlgebraicSimplificationPass : public Pass {
+public:
+    AlgebraicSimplificationPass() : Pass("AlgebraicSimp") {}
+    PassResult run(Graph& g) override;
+};
+
+// Strength reduction — x*2^k → x<<k, x/2^k → x>>k (signedness-aware).
+class StrengthReductionPass : public Pass {
+public:
+    StrengthReductionPass() : Pass("StrengthReduce") {}
+    PassResult run(Graph& g) override;
+};
+
+// Comparison folding — !(x<y) → x>=y, x==x → true, x!=x → false.
+class ComparisonFoldingPass : public Pass {
+public:
+    ComparisonFoldingPass() : Pass("CompareFold") {}
+    PassResult run(Graph& g) override;
+};
+
+// Branch folding — if(true) A else B → A, if(false) A else B → B.
+class BranchFoldingPass : public Pass {
+public:
+    BranchFoldingPass() : Pass("BranchFold") {}
+    PassResult run(Graph& g) override;
+};
+
+// Type narrowing — propagate TypeIds through the graph, refine Int|Float → Int.
+class TypeNarrowingPass : public Pass {
+public:
+    TypeNarrowingPass() : Pass("TypeNarrow") {}
+    PassResult run(Graph& g) override;
+};
+
 }  // namespace arcjit

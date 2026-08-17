@@ -47,11 +47,27 @@ optimizing JIT, with background compilation via enkiTS and OSR support.
 | Thread pools (enkiTS)              | wired             |
 | End-to-end CLI                     | working           |
 
-**138 tests passing.** Verified end-to-end:
+**186 tests passing.** Verified end-to-end:
 - `arcjit-cli --tier 0 --bytecode "1+2+3"` → 6 (interpreter)
 - `arcjit-cli --tier 1 --bytecode "1+2+3"` → 6 (Tier-1 JIT)
 - `arcjit-cli --tier 2 --bytecode "1+2+3"` → 6 (Tier-2 SoN JIT, GVN+ConstFold fold to ConstInt(6))
 - `arcjit-cli --tier 0 --bytecode "(10+20)*3"` → 90 (all three tiers agree)
+
+### Optimization passes (Tier-2 pipeline)
+
+| Pass | Transformations | Golden tests |
+| --- | --- | --- |
+| TypeNarrowing | Propagate TypeIds (Int, Float, Bool, Null, String) | 12 |
+| GVN | Deduplicate identical computations | 12 |
+| ConstantFolding | Fold ConstInt + ConstInt → ConstInt | 12 |
+| AlgebraicSimplification | x+0→x, x*1→x, x*0→0, x-x→0, x/1→x, !!x→x | 12 |
+| ComparisonFolding | x==x→true, x!=x→false, !(x<y)→x>=y | 12 |
+| BranchFolding | if(true)→drop false branch, if(false)→drop true branch | 12 |
+| StrengthReduction | x*2^k → x<<k (detects opportunities, future: emit shifts) | — |
+| DCE | Remove dead pure nodes | 12 |
+
+The pipeline runs all passes to a fixpoint (max 8 iterations). The graph
+verifier runs after every pass in debug builds (Rule 42).
 
 ### Testing & debugging infrastructure (Rules 36-43)
 
@@ -60,7 +76,7 @@ optimizing JIT, with background compilation via enkiTS and OSR support.
 | Textual IR dumper (`dump_graph_text`) | implemented |
 | Graph verifier (runs after every pass in debug builds) | implemented |
 | Golden test runner (`.in.ir` / `.out.ir` files, `--update-golden`) | implemented |
-| 36 golden tests (12 each for GVN, ConstFold, DCE) | implemented |
+| 84 golden tests (12 each for 7 passes) | implemented |
 | Replay serialization (bytecode + options → binary file) | implemented |
 | Differential testing (interpreter ↔ Tier-1 ↔ Tier-2) | implemented |
 | Pass instrumentation (PassEvent, timeline, env-var breakpoints) | implemented |
