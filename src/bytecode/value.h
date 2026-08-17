@@ -61,6 +61,19 @@ struct Value {
 
     // --- Truthiness (matches `isTruthy` in Arc's vm.c) ----------------------
     [[nodiscard]] bool is_truthy() const noexcept;
+
+    // --- Equality (for tests / deopt validation) ---------------------------
+    [[nodiscard]] bool operator==(const Value& o) const noexcept {
+        if (type != o.type) return false;
+        switch (type) {
+            case ValueType::Undef:
+            case ValueType::Null:  return true;
+            case ValueType::Int:   return as.i == o.as.i;
+            case ValueType::Float: return as.f == o.as.f;
+            case ValueType::Obj:   return as.obj == o.as.obj;
+        }
+        return false;
+    }
 };
 
 static_assert(std::is_trivially_copyable_v<Value>);

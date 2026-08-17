@@ -22,11 +22,30 @@ add_executable(arcjit_tests
     test_tier2.cpp
     test_interp.cpp
     test_runtime.cpp
+    test_verifier.cpp
+    test_ir_dump.cpp
+    test_differential.cpp
+    test_differential_impl.cpp
+    golden/test_golden_gvn.cpp
+    golden/test_golden_constfold.cpp
+    golden/test_golden_dce.cpp
+    test_rule36_branch_bug.cpp
+    test_replay.cpp
+    test_instrumentation.cpp
+    test_deopt_validator.cpp
 )
+target_include_directories(arcjit_tests PRIVATE .)
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)
 target_compile_options(arcjit_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
 target_link_libraries(arcjit_tests PRIVATE
     arcjit_runtime
     GTest::gtest_main
 )
+
+# Pass the golden test directory via env var so tests can find .ir files.
+# This must be set BEFORE gtest_discover_tests so the env var is available.
+set_target_properties(arcjit_tests PROPERTIES
+    ENVIRONMENT "ARCJIT_GOLDEN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/golden"
+)
+
 gtest_discover_tests(arcjit_tests)

@@ -718,7 +718,135 @@ arcJIT/
 
 ---
 
-## 9. Definition of done
+## 9. Testing, debugging, and regression rules
+
+Compiler bugs are uniquely expensive because they corrupt trust. Users who
+get wrong results silently will never come back. The rules in this section
+exist to make entire categories of bugs impossible.
+
+### Rule 36 — Five regression tests per bug fix
+
+A fix is not enough. Every bug fix must include at least 5 regression tests
+covering distinct views of the failure:
+
+| # | View                | Purpose                                      |
+|---|---------------------|----------------------------------------------|
+| 1 | Minimal reproducer  | Smallest possible input that triggers the bug |
+| 2 | Variant trigger     | Different code pattern exercising same root cause |
+| 3 | Boundary/negative   | Ensures fix doesn't over-correct             |
+| 4 | Integration/contextual | Bug in realistic surrounding code         |
+| 5 | Deopt/state reconstruction | Verifies correctness under bailout    |
+
+**Enforcement:** CI fails if a PR labeled `bugfix` has fewer than 5 new test
+cases. No exceptions. The fifth test is never about the current bug — it's
+about the next bug that shares a root cause but manifests differently.
+
+### Rule 37 — Golden tests for every pass
+
+Every pass must have ≥10 golden IR tests before merging. Golden tests are
+checked-in `.in.ir` / `.out.ir` file pairs under `tests/golden/<pass_name>/`.
+The runner compares pass output against the golden file. Update goldens
+explicitly with `--update-golden`.
+
+### Rule 38 — Differential testing is mandatory in CI
+
+Interpreter ↔ Tier-1 ↔ Tier-2 comparisons run on every PR. Divergence blocks
+merge. The differential test framework runs the same Chunk through all three
+tiers and asserts byte-for-byte identical results.
+
+### Rule 39 — Deopt paths must be fuzzed weekly
+
+Scheduled CI job. Results triaged within 24 hours. Untriaged deopt fuzz
+failures block releases.
+
+### Rule 40 — Replay logs retained for all CI failures
+
+Failed test runs automatically save full compile replay artifacts (bytecode +
+profile + options + RNG seed). Debugging starts from replay, not reproduction.
+
+### Rule 41 — Performance regressions require explicit waiver
+
+If a benchmark regresses >5%, the PR must include root cause analysis,
+justification, a tracking issue, and tech-lead approval. No silent
+performance degradation.
+
+### Rule 42 — Graph verifier runs in debug builds after every pass
+
+Not optional. Not "only in CI." Every local debug build verifies. Release
+builds may disable via flag. The verifier checks:
+
+- No dangling NodeIds (every edge points to a live node)
+- Effect chain continuity (every effectful node has an effect input)
+- Control dominance (every node's control input dominates it)
+- Use-def consistency (use lists match input lists)
+- No dead nodes with live users
+- FrameState attached to every guard
+
+### Rule 43 — Test names encode the bug/feature they cover
+
+Bad:  `test_pea_3`
+Good: `pea_non_escaping_object_with_deopt_materializes_correctly`
+Good: `load_elim_no_forward_across_ffi_call_boundary`
+
+Searchable, self-documenting, survives refactoring.
+
+---
+
+## 10. Debugging tools
+
+### 10.1 IR dumper
+
+A textual IR dump format that is human-readable, diffable, and (eventually)
+round-trippable. Lives in `src/core/ir_dump.h`.
+
+```text
+n1 = Start
+n2 = ConstInt(1)                              [type=Int, pure, gvnable]
+n3 = ConstInt(2)                              [type=Int, pure, gvnable]
+n4 = Add(n2, n3)                              [type=Int, pure, gvnable, commutative]
+n5 = Stop(n4)                                 [control]
+```
+
+Edge kinds are annotated: `data:`, `ctrl:`, `effect:`, `fs:`.
+
+### 10.2 Graph verifier
+
+`src/core/verifier.h`. Runs after every pass in debug builds. Aborts the
+compilation (and dumps the graph) on any invariant violation.
+
+### 10.3 Pass instrumentation
+
+`src/passman/instrument.h`. Every pass emits structured `PassEvent`s:
+`Begin`, `End`, `NodeChanged`, `NodeCreated`, `NodeDeleted`. Used to build:
+
+- Pass timeline viewer (which passes dominate compile time)
+- Change log per node (every transformation a node undergoes)
+- Diff between pass runs
+
+Environment-variable breakpoints:
+- `ARCJIT_BREAK_NODE=<id>` — trap when pass touches node `<id>`
+- `ARCJIT_BREAK_PASS=<name>` — trap when pass `<name>` runs
+
+### 10.4 Replay serialization
+
+`src/core/replay.h`. Serializes a compile job's inputs (bytecode, profile,
+options, RNG seed) to a binary file. `arcjit-replay` deserializes and
+re-runs deterministically.
+
+### 10.5 Differential testing
+
+`tests/differential.h`. Runs a Chunk through all three tiers, asserts
+identical results. Catches miscompilations early.
+
+### 10.6 Deopt validator
+
+`src/runtime/deopt_validator.h`. After every deopt in debug builds:
+reconstruct interpreter state from frame state, run N steps in interpreter,
+compare against expected. Catches silent miscompilations.
+
+---
+
+## 11. Definition of done
 
 The project is "done" for the initial milestone when:
 
@@ -728,5 +856,8 @@ The project is "done" for the initial milestone when:
 4. The safepoint mechanism works: a request from any thread reaches all mutator threads within a bounded number of bytecode instructions.
 5. The compiler pool runs Tier-1 and Tier-2 jobs concurrently across multiple threads without corrupting IR state.
 6. All passes are idempotent — running them twice produces the same IR.
+7. The graph verifier passes after every pass in debug builds (Rule 42).
+8. Every pass has ≥10 golden tests (Rule 37).
+9. Differential testing passes for all test Chunks across all three tiers (Rule 38).
 
 Everything beyond that is optimization work.

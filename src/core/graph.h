@@ -54,6 +54,8 @@ public:
 
     Graph(const Graph&)            = delete;
     Graph& operator=(const Graph&) = delete;
+    Graph(Graph&&)                 = default;
+    Graph& operator=(Graph&&)      = default;
 
     // --- Node construction ---------------------------------------------------
     //
@@ -86,6 +88,9 @@ public:
         for (uint32_t i = 0; i < inputs.size(); ++i) {
             const auto& [target, kind] = inputs[i];
             if (!target.valid()) continue;
+            // Guard against out-of-range targets (defensive — passes should
+            // never create these, but the verifier needs to catch them).
+            if (target.value >= nodes_.size()) continue;
             Node& producer = nodes_[target.value];
             Use  u{};
             u.user     = NodeId{id};

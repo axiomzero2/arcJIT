@@ -47,11 +47,25 @@ optimizing JIT, with background compilation via enkiTS and OSR support.
 | Thread pools (enkiTS)              | wired             |
 | End-to-end CLI                     | working           |
 
-**45 tests passing.** Verified end-to-end:
+**138 tests passing.** Verified end-to-end:
 - `arcjit-cli --tier 0 --bytecode "1+2+3"` → 6 (interpreter)
 - `arcjit-cli --tier 1 --bytecode "1+2+3"` → 6 (Tier-1 JIT)
 - `arcjit-cli --tier 2 --bytecode "1+2+3"` → 6 (Tier-2 SoN JIT, GVN+ConstFold fold to ConstInt(6))
 - `arcjit-cli --tier 0 --bytecode "(10+20)*3"` → 90 (all three tiers agree)
+
+### Testing & debugging infrastructure (Rules 36-43)
+
+| Component | Status |
+| --- | --- |
+| Textual IR dumper (`dump_graph_text`) | implemented |
+| Graph verifier (runs after every pass in debug builds) | implemented |
+| Golden test runner (`.in.ir` / `.out.ir` files, `--update-golden`) | implemented |
+| 36 golden tests (12 each for GVN, ConstFold, DCE) | implemented |
+| Replay serialization (bytecode + options → binary file) | implemented |
+| Differential testing (interpreter ↔ Tier-1 ↔ Tier-2) | implemented |
+| Pass instrumentation (PassEvent, timeline, env-var breakpoints) | implemented |
+| Deopt validator (reconstruct state, compare against expected) | implemented |
+| Rule 36 regression tests (5 tests for the Tier-2 branch bug) | implemented |
 
 ## Dependencies
 

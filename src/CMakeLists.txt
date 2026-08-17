@@ -9,19 +9,23 @@ target_include_directories(arcjit_bytecode PUBLIC .)
 target_compile_features(arcjit_bytecode PUBLIC cxx_std_23)
 target_compile_options(arcjit_bytecode PRIVATE -Wall -Wextra -Wpedantic)
 
-# --- Core IR library (Node, Graph, Arena) -----------------------------------
+# --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay) ------
 add_library(arcjit_core STATIC
     core/node.cpp
     core/graph.cpp
+    core/ir_dump.cpp
+    core/verifier.cpp
+    core/replay.cpp
 )
 target_include_directories(arcjit_core PUBLIC .)
 target_compile_features(arcjit_core PUBLIC cxx_std_23)
 target_compile_options(arcjit_core PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(arcjit_core PUBLIC arcjit_bytecode)
 
-# --- Pass manager -----------------------------------------------------------
+# --- Pass manager (with instrumentation) ------------------------------------
 add_library(arcjit_passman STATIC
     passman/pass.cpp
+    passman/instrument.cpp
 )
 target_include_directories(arcjit_passman PUBLIC .)
 target_compile_features(arcjit_passman PUBLIC cxx_std_23)
@@ -56,9 +60,10 @@ target_link_libraries(arcjit_tier2 PUBLIC
     asmjit::asmjit
 )
 
-# --- Runtime (orchestrator, interpreter, thread pool) ----------------------
+# --- Runtime (orchestrator, interpreter, thread pool, deopt validator) ------
 add_library(arcjit_runtime STATIC
     runtime/runtime.cpp
+    runtime/deopt_validator.cpp
 )
 target_include_directories(arcjit_runtime PUBLIC .)
 target_compile_features(arcjit_runtime PUBLIC cxx_std_23)

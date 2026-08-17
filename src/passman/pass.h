@@ -4,6 +4,9 @@
 // Per docs/ARCHITECTURE.md §4, every pass must be idempotent and monotonic
 // decreasing in IR size (or guarded by a budget). The pass manager runs
 // passes to a fixpoint.
+//
+// In debug builds (Rule 42), the pipeline runs the graph verifier after
+// every pass. In release builds, verification is skipped for speed.
 #pragma once
 
 #include <functional>
@@ -14,6 +17,7 @@
 #include <vector>
 
 #include "core/graph.h"
+#include "passman/instrument.h"
 
 namespace arcjit {
 
@@ -56,12 +60,26 @@ class PassPipeline {
 public:
     void add(std::unique_ptr<Pass> p) { passes_.push_back(std::move(p)); }
 
-    // Run all passes once.
+    [[nodiscard]] size_t size() const noexcept { return passes_.size(); }
+
+    // Run all passes once. In debug builds, verifies the graph after each pass.
     PassResult run_once(Graph& g) {
         PassResult total;
+        auto& instr = global_instrumentation();
+
         for (auto& p : passes_) {
+            instr.record(PassEventType::PassBegin, p->name());
+
             PassResult r = p->run(g);
             total |= r;
+
+            instr.record(PassEventType::PassEnd, p->name());
+
+#ifndef NDEBUG
+            // Rule 42: verify after every pass in debug builds.
+            verify_or_die(g, std::format("after pass {}", p->name()));
+#endif
+
             if (!r.changed) {
                 // No-op pass: skip in future runs.
             }
