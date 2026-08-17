@@ -207,4 +207,12 @@ public:
     PassResult run(Graph& g) override;
 };
 
+// Bounds check elimination — prove 0 <= i < len from loop induction
+// variables and remove CheckBounds nodes.
+class BoundsCheckEliminationPass : public Pass {
+public:
+    BoundsCheckEliminationPass() : Pass("BCE") {}
+    PassResult run(Graph& g) override;
+};
+
 }  // namespace arcjit

@@ -36,6 +36,7 @@ add_executable(arcjit_tests
     golden/test_golden_strength_reduce.cpp
     golden/test_golden_licm.cpp
     golden/test_golden_escape_analysis.cpp
+    golden/test_golden_bce.cpp
     test_rule36_branch_bug.cpp
     test_replay.cpp
     test_instrumentation.cpp

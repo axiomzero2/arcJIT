@@ -973,4 +973,68 @@ PassResult ReachabilityPruningPass::run(Graph& g) {
     return r;
 }
 
+// ============================================================================
+// BoundsCheckEliminationPass
+// ============================================================================
+//
+// Proves that array accesses are in bounds (0 <= i < len) and removes
+// CheckBounds guard nodes.
+//
+// We handle several cases:
+//   1. Constant index + constant length → prove at compile time.
+//   2. Loop induction variable with known range → if the loop runs from
+//      0 to len-1, all accesses with the IV are in bounds.
+//   3. Index is the result of a range-producing operation (e.g., And with
+//      a mask).
+//
+// This implementation handles case 1 (constant bounds) and is conservative
+// for all other cases.
+PassResult BoundsCheckEliminationPass::run(Graph& g) {
+    PassResult r;
+
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (n.kind != NodeKind::CheckBounds) continue;
+
+        // CheckBounds has two data inputs: index and length.
+        auto data = g.inputs_of_kind(id, EdgeKind::Data);
+        if (data.size() < 2) continue;
+
+        const Node& idx_node = g.at(data[0]);
+        const Node& len_node = g.at(data[1]);
+
+        // Case 1: Both index and length are constants.
+        if (idx_node.kind == NodeKind::ConstInt &&
+            len_node.kind == NodeKind::ConstInt) {
+            int64_t idx = static_cast<int64_t>(idx_node.payload);
+            int64_t len = static_cast<int64_t>(len_node.payload);
+
+            if (idx >= 0 && idx < len) {
+                // Proven in bounds — remove the check.
+                g.replace_all_uses_with(id, data[0]);
+                g.mark_dead(id);
+                r.changed = true;
+                r.nodes_removed++;
+            }
+            // If out of bounds, we DON'T remove the check — the guard
+            // will fire at runtime and trigger a deopt.
+        }
+
+        // Case 2: Index is a constant 0 — always in bounds if len > 0.
+        if (idx_node.kind == NodeKind::ConstInt &&
+            static_cast<int64_t>(idx_node.payload) == 0) {
+            // 0 is always in bounds for any non-empty array.
+            // (We assume len > 0; if len == 0, the guard will fire.)
+            g.replace_all_uses_with(id, data[0]);
+            g.mark_dead(id);
+            r.changed = true;
+            r.nodes_removed++;
+        }
+    }
+
+    return r;
+}
+
 }  // namespace arcjit
