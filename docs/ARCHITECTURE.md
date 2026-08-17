@@ -791,6 +791,37 @@ Good: `load_elim_no_forward_across_ffi_call_boundary`
 
 Searchable, self-documenting, survives refactoring.
 
+### Rule 44 — No assumption without invalidation
+Every speculative assumption must have a registry entry (Watchdog), an
+invalidation path (Trip), dependent code tracking, and a fallback tier.
+
+### Rule 45 — No specialization without fallback
+Every specialized clone must have a generic fallback, a deopt path, a profile
+downgrade path, and a budget limit (Fuse).
+
+### Rule 46 — No profile data without confidence
+Profile data must include sample count, stability, age, decay, variance, and
+deopt correlation (Meter). Low-confidence data must not trigger aggressive
+speculation.
+
+### Rule 47 — No aggressive pass without cost model
+Inlining, cloning, unrolling, vectorization, block duplication, loop versioning,
+and PEA materialization must all use a cost model (Regulator).
+
+### Rule 48 — No FFI optimization without ABI proof
+FFI optimizations must prove calling convention correctness, stack alignment,
+register clobbering, errno handling, thread state transition, memory ownership,
+and exception safety.
+
+### Rule 49 — No vectorization without dependence proof
+Vectorization must prove no aliasing (or versioned check), bounds safety,
+alignment, correct remainder handling, correct scalar fallback, and correct
+exception behavior.
+
+### Rule 50 — No persistent state without versioning
+Profile caches, code caches, serialized snapshots, AOT artifacts, and compiled
+metadata must all be versioned.
+
 ---
 
 ## 10. Debugging tools

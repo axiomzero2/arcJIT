@@ -139,7 +139,8 @@ ctest --test-dir build
 
 ## Design rules
 
-The non-bypassable rules of the project are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). In summary:
+The non-bypassable rules of the project are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (Rules 1-50)
+and the full optimization roadmap is in [`docs/GIGAVOLT_ROADMAP.md`](docs/GIGAVOLT_ROADMAP.md). In summary:
 
 1. Never optimize dynamic behavior without profile data.
 2. Every speculative optimization must have a bailout path.
@@ -151,6 +152,17 @@ The non-bypassable rules of the project are in [`docs/ARCHITECTURE.md`](docs/ARC
 8. Every pass must be idempotent.
 9. Mutator threads must never block on JIT or GC locks.
 10. Compiler threads must never block on mutator state.
+36. Five regression tests per bug fix.
+37. Golden tests for every pass (≥10).
+38. Differential testing is mandatory in CI.
+42. Graph verifier runs after every pass in debug builds.
+44. No assumption without invalidation (Watchdog).
+45. No specialization without fallback.
+46. No profile data without confidence (Meter).
+47. No aggressive pass without cost model (Regulator).
+48. No FFI optimization without ABI proof.
+49. No vectorization without dependence proof.
+50. No persistent state without versioning.
 
 ## License
 
