@@ -792,87 +792,123 @@ PassResult CallInliningPass::run(Graph& g) {
 }
 
 // ============================================================================
-// GlobalCodeMotionPass (GCM)
+// GlobalCodeMotionPass (GCM) — schedule late
 // ============================================================================
 //
-// Schedules nodes to minimize register pressure and hide latency.
+// Schedules nodes to minimize register pressure by placing each pure node
+// as LATE as legally possible — just before its first use.
 //
-// "Schedule early": place a node at the deepest common dominator of its
-//   inputs (as early as legally possible). This hides latency by giving
-//   downstream nodes more time to consume the result.
+// "Schedule late": for each pure node, find the common dominator of all
+//   its USES' control dependencies. This is the latest block where the
+//   node can be placed while still being available to all its users.
+//   Moving a node later shortens its live range, reducing register pressure.
 //
-// "Schedule late": place a node just before its first use (as late as
-//   legally possible). This reduces register pressure by shortening live
-//   ranges.
+// This is safe for the block-based lowering because:
+//   - Pure nodes with no control input that reference block-bound nodes
+//     get a control input pointing to the block of their latest use.
+//   - This ensures they're emitted in the correct block (after their inputs
+//     and before their uses).
 //
-// We implement "schedule early" — moving pure nodes to their earliest legal
-// position (the common dominator of their inputs' control dependencies).
-// This is safe because pure nodes have no side effects.
+// We do NOT move nodes earlier (schedule-early) because that can place a
+// pure node in a block before its effectful inputs are available.
 PassResult GlobalCodeMotionPass::run(Graph& g) {
     PassResult r;
 
     DominanceInfo dom = compute_dominance(g);
     if (!g.start().valid()) return r;
 
-    // For each pure node with a control input, try to move it earlier.
-    // "Earlier" = the common dominator of all its data inputs' control
-    // dependencies.
+    // For each pure node, find the latest legal position.
+    // The latest position is the common dominator of all USES' control
+    // dependencies. If the node has no control input, we assign it one
+    // pointing to the latest-use block. If it already has a control input,
+    // we move it to the latest position (if different).
     for (uint32_t i = 1; i < g.size(); ++i) {
         NodeId id{static_cast<uint32_t>(i)};
         Node& n = g.at(id);
         if (has_flag(n.flags, NodeFlags::IsDead)) continue;
         if (!has_flag(n.flags, NodeFlags::Pure)) continue;
+        if (n.kind == NodeKind::Start || n.kind == NodeKind::Stop) continue;
 
-        // Find the current control input.
-        auto inputs = g.inputs_of(id);
+        // Find all uses of this node (nodes that reference it as a data input).
+        // For each use, find the use's control dependency.
+        NodeId latest = {};
+        for (uint32_t j = 1; j < g.size(); ++j) {
+            NodeId uid{static_cast<uint32_t>(j)};
+            const Node& user = g.at(uid);
+            if (has_flag(user.flags, NodeFlags::IsDead)) continue;
+
+            bool uses_this = false;
+            for (const auto& e : g.inputs_of(uid)) {
+                if (e.kind == EdgeKind::Data && e.target == id) {
+                    uses_this = true;
+                    break;
+                }
+            }
+            if (!uses_this) continue;
+
+            // Find the user's control input.
+            NodeId user_ctrl = {};
+            for (const auto& e : g.inputs_of(uid)) {
+                if (e.kind == EdgeKind::Control) {
+                    user_ctrl = e.target;
+                    break;
+                }
+            }
+
+            if (!user_ctrl.valid()) {
+                // User has no control input — skip (can't determine position).
+                continue;
+            }
+
+            if (!latest.valid()) {
+                latest = user_ctrl;
+            } else {
+                latest = dom.common_dominator(latest, user_ctrl);
+            }
+        }
+
+        if (!latest.valid()) continue;  // no uses or no control info
+
+        // Find the current control input (if any).
         NodeId current_ctrl = {};
-        for (const auto& e : inputs) {
+        for (const auto& e : g.inputs_of(id)) {
             if (e.kind == EdgeKind::Control) {
                 current_ctrl = e.target;
                 break;
             }
         }
-        if (!current_ctrl.valid()) continue;
 
-        // Compute the earliest legal position: the common dominator of
-        // all data inputs' control dependencies.
-        NodeId earliest = g.start();
-        for (const auto& e : inputs) {
-            if (e.kind != EdgeKind::Data) continue;
-            if (!e.target.valid()) continue;
+        if (current_ctrl == latest) continue;  // already in the right place
 
-            // Find the control input of this data producer.
-            auto prod_inputs = g.inputs_of(e.target);
-            NodeId prod_ctrl = {};
-            for (const auto& pe : prod_inputs) {
-                if (pe.kind == EdgeKind::Control) {
-                    prod_ctrl = pe.target;
+        // Move the node to the latest position.
+        if (current_ctrl.valid()) {
+            // Replace the existing control input.
+            for (uint32_t j = 0; j < n.input_count; ++j) {
+                auto edges = g.all_edges();
+                if (edges[n.first_input + j].kind == EdgeKind::Control) {
+                    g.replace_input(id, j, latest);
+                    r.changed = true;
                     break;
                 }
             }
-            if (!prod_ctrl.valid()) continue;
-
-            earliest = dom.common_dominator(earliest, prod_ctrl);
-            if (!earliest.valid()) {
-                earliest = g.start();
-                break;
+        } else {
+            // Node has no control input — add one.
+            // We need to add a control edge pointing to `latest`.
+            // Since Graph::add_node creates edges at construction time,
+            // we can't easily add an edge to an existing node. Instead,
+            // we create a new node with the same kind/flags/type/payload
+            // and the control edge, then replace all uses.
+            std::vector<std::pair<NodeId, EdgeKind>> new_inputs;
+            new_inputs.push_back({latest, EdgeKind::Control});
+            for (const auto& e : g.inputs_of(id)) {
+                new_inputs.push_back({e.target, e.kind});
             }
-        }
-
-        // If the earliest position is different from the current position,
-        // and the earliest position dominates the current position, move it.
-        if (earliest.valid() && earliest != current_ctrl) {
-            if (dom.dominates(earliest, current_ctrl)) {
-                // Replace the control input with the earlier position.
-                for (uint32_t j = 0; j < n.input_count; ++j) {
-                    auto edges = g.all_edges();
-                    if (edges[n.first_input + j].kind == EdgeKind::Control) {
-                        g.replace_input(id, j, earliest);
-                        r.changed = true;
-                        break;
-                    }
-                }
-            }
+            NodeId new_node = g.add_node(n.kind, n.flags, n.type, n.payload, new_inputs);
+            g.replace_all_uses_with(id, new_node);
+            g.mark_dead(id);
+            r.changed = true;
+            r.nodes_added++;
+            r.nodes_removed++;
         }
     }
 
@@ -916,24 +952,30 @@ PassResult ReachabilityPruningPass::run(Graph& g) {
         }
     }
 
-    // Backward reachability: nodes that contribute to Stop's data input.
+    // Backward reachability: nodes that contribute to Stop (via data OR
+    // effect edges). Effectful nodes like StoreLocal don't produce a data
+    // value for Stop, but they're part of the effect chain that Stop
+    // depends on.
     std::vector<bool> contributes_to_stop(g.size(), false);
     if (g.stop().valid()) {
         std::queue<uint32_t> bw_worklist;
-        // Start from Stop's data inputs.
+        // Start from Stop's data AND effect inputs.
         for (const auto& e : g.inputs_of(g.stop())) {
-            if (e.kind == EdgeKind::Data && e.target.valid()) {
-                contributes_to_stop[e.target.value] = true;
-                bw_worklist.push(e.target.value);
+            if ((e.kind == EdgeKind::Data || e.kind == EdgeKind::Effect) && e.target.valid()) {
+                if (!contributes_to_stop[e.target.value]) {
+                    contributes_to_stop[e.target.value] = true;
+                    bw_worklist.push(e.target.value);
+                }
             }
         }
         while (!bw_worklist.empty()) {
             uint32_t cur = bw_worklist.front();
             bw_worklist.pop();
-            // Walk data inputs of this node.
+            // Walk data AND effect inputs of this node.
             NodeId nid{cur};
             for (const auto& e : g.inputs_of(nid)) {
-                if (e.kind == EdgeKind::Data && e.target.valid() &&
+                if ((e.kind == EdgeKind::Data || e.kind == EdgeKind::Effect) &&
+                    e.target.valid() &&
                     !contributes_to_stop[e.target.value]) {
                     contributes_to_stop[e.target.value] = true;
                     bw_worklist.push(e.target.value);

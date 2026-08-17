@@ -1048,12 +1048,12 @@ PassResult run_tier2_pipeline(Tier2Job& job) {
     job.pipeline.add(std::make_unique<StrengthReductionPass>());
     job.pipeline.add(std::make_unique<LICMPass>());
     job.pipeline.add(std::make_unique<LoopUnrollingPass>());
-    // GCM and ReachabilityPruning are disabled — they change control
-    // dependencies in ways that can break the block-based lowering when
-    // pure nodes reference effectful nodes. Will re-enable after
-    // implementing schedule-late GCM.
+    // GCM is disabled — schedule-late creates new nodes with control edges,
+    // which interacts poorly with the block-based lowering's Phase 1b check
+    // for control-free pure nodes. Will re-enable after refactoring the
+    // lowering to handle GCM-modified graphs correctly.
     // job.pipeline.add(std::make_unique<GlobalCodeMotionPass>());
-    // job.pipeline.add(std::make_unique<ReachabilityPruningPass>());
+    job.pipeline.add(std::make_unique<ReachabilityPruningPass>());
     job.pipeline.add(std::make_unique<DeadCodeElimPass>());
     return job.pipeline.run_to_fixpoint(job.graph, 8);
 }
