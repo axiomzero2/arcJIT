@@ -41,6 +41,7 @@ add_executable(arcjit_tests
     test_instrumentation.cpp
     test_deopt_validator.cpp
     test_fuzzer.cpp
+    test_dominance.cpp
 )
 target_include_directories(arcjit_tests PRIVATE .)
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)

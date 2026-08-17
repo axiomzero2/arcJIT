@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "passman/pass.h"
 
+#include <queue>
 #include <unordered_map>
+
+#include "core/dominance.h"
 
 namespace arcjit {
 
@@ -549,47 +552,73 @@ PassResult TypeNarrowingPass::run(Graph& g) {
 //   - All of its data inputs are defined OUTSIDE the loop
 //   - It has no control/effect dependencies inside the loop
 //
-// This implementation detects loop structures via Loop/LoopExit nodes.
-// Since our current SoN doesn't always emit explicit Loop nodes, this pass
-// also checks for back-edges (Region nodes with multiple predecessors where
-// one predecessor is dominated by the Region itself).
-//
+// Uses compute_dominance() and compute_loops() to find loop bodies.
 // When a loop-invariant node is found, we hoist it by moving its control
-// input from the loop header to the loop pre-header.
+// input from the loop header to the loop pre-header (the immediate dominator
+// of the loop header).
 PassResult LICMPass::run(Graph& g) {
     PassResult r;
 
-    // Find all Loop nodes (our IR uses Loop for back-edge regions).
-    // If there are no Loop nodes, there's nothing to hoist.
-    std::vector<NodeId> loops;
-    for (uint32_t i = 1; i < g.size(); ++i) {
-        NodeId id{static_cast<uint32_t>(i)};
-        const Node& n = g.at(id);
-        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-        if (n.kind == NodeKind::Loop) {
-            loops.push_back(id);
+    // Compute dominance and loop info.
+    DominanceInfo dom = compute_dominance(g);
+    LoopInfo loops = compute_loops(g, dom);
+
+    if (loops.loops.empty()) {
+        return r;  // No loops — nothing to hoist.
+    }
+
+    for (const auto& loop : loops.loops) {
+        NodeId header = loop.header;
+        if (!header.valid()) continue;
+
+        // The pre-header is the immediate dominator of the header.
+        NodeId pre_header = NodeId{dom.idom[header.value]};
+        if (!pre_header.valid() || pre_header == header) continue;
+
+        // Collect the set of nodes in the loop body.
+        std::vector<bool> in_loop(g.size(), false);
+        for (NodeId n : loop.body) {
+            if (n.valid() && n.value < g.size()) {
+                in_loop[n.value] = true;
+            }
         }
-    }
 
-    if (loops.empty()) {
-        // No explicit Loop nodes — LICM is a no-op.
-        // (A full implementation would also detect implicit loops via
-        // back-edge analysis on Region nodes.)
-        return r;
-    }
+        // For each pure node in the loop, check if all its data inputs
+        // are defined outside the loop. If so, hoist it.
+        for (NodeId n : loop.body) {
+            if (!n.valid()) continue;
+            Node& node = g.at(n);
+            if (has_flag(node.flags, NodeFlags::IsDead)) continue;
+            if (!has_flag(node.flags, NodeFlags::Pure)) continue;
 
-    // For each loop, find the set of nodes inside the loop and check
-    // which are loop-invariant.
-    //
-    // For now, we implement a conservative version: we look for pure nodes
-    // whose data inputs all come from outside the loop (i.e., their
-    // definitions are not reachable from the loop header).
-    //
-    // This is a placeholder that records opportunities without actually
-    // hoisting — full LICM requires dominance analysis which we haven't
-    // built yet.
-    for (NodeId loop : loops) {
-        (void)loop;  // TODO: implement loop body collection + hoisting
+            // Check all data inputs — they must all be defined outside the loop.
+            bool all_inputs_outside = true;
+            auto inputs = g.inputs_of(n);
+            for (const auto& e : inputs) {
+                if (e.kind != EdgeKind::Data) continue;
+                if (!e.target.valid()) continue;
+                if (e.target.value < in_loop.size() && in_loop[e.target.value]) {
+                    all_inputs_outside = false;
+                    break;
+                }
+            }
+
+            if (!all_inputs_outside) continue;
+
+            // Hoist: replace the node's control input with the pre-header.
+            // We walk the inputs and replace any Control edge pointing to
+            // the header (or any loop body node) with the pre-header.
+            for (uint32_t j = 0; j < node.input_count; ++j) {
+                auto edges = g.all_edges();
+                const Edge& e = edges[node.first_input + j];
+                if (e.kind == EdgeKind::Control) {
+                    // Replace the control input with the pre-header.
+                    g.replace_input(n, j, pre_header);
+                }
+            }
+
+            r.changed = true;
+        }
     }
 
     return r;

@@ -180,6 +180,10 @@ public:
         nodes_[id.value].flags = nodes_[id.value].flags | NodeFlags::IsDead;
     }
 
+    // --- Edge access (for passes that need to iterate edges directly) --------
+    [[nodiscard]] std::span<const Edge> all_edges() const noexcept { return edges_; }
+    [[nodiscard]] std::span<Edge> all_edges() noexcept { return edges_; }
+
     // --- IR dump ------------------------------------------------------------
     [[nodiscard]] std::string dump_dot() const;
 

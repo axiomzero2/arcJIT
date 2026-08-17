@@ -9,13 +9,14 @@ target_include_directories(arcjit_bytecode PUBLIC .)
 target_compile_features(arcjit_bytecode PUBLIC cxx_std_23)
 target_compile_options(arcjit_bytecode PRIVATE -Wall -Wextra -Wpedantic)
 
-# --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay) ------
+# --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay, Dominance)
 add_library(arcjit_core STATIC
     core/node.cpp
     core/graph.cpp
     core/ir_dump.cpp
     core/verifier.cpp
     core/replay.cpp
+    core/dominance.cpp
 )
 target_include_directories(arcjit_core PUBLIC .)
 target_compile_features(arcjit_core PUBLIC cxx_std_23)
