@@ -1053,6 +1053,7 @@ PassResult run_tier2_pipeline(Tier2Job& job) {
     // for control-free pure nodes. Will re-enable after refactoring the
     // lowering to handle GCM-modified graphs correctly.
     // job.pipeline.add(std::make_unique<GlobalCodeMotionPass>());
+    job.pipeline.add(std::make_unique<BoundsCheckEliminationPass>());
     job.pipeline.add(std::make_unique<ReachabilityPruningPass>());
     job.pipeline.add(std::make_unique<DeadCodeElimPass>());
     return job.pipeline.run_to_fixpoint(job.graph, 8);
