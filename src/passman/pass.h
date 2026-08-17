@@ -191,4 +191,20 @@ public:
     PassResult run(Graph& g) override;
 };
 
+// Global code motion — schedule nodes early (to hide latency) or late
+// (to reduce register pressure). Uses dominance to find the earliest
+// legal position for each node.
+class GlobalCodeMotionPass : public Pass {
+public:
+    GlobalCodeMotionPass() : Pass("GCM") {}
+    PassResult run(Graph& g) override;
+};
+
+// Reachability pruning — remove nodes not reachable from Start or Stop.
+class ReachabilityPruningPass : public Pass {
+public:
+    ReachabilityPruningPass() : Pass("ReachPrune") {}
+    PassResult run(Graph& g) override;
+};
+
 }  // namespace arcjit

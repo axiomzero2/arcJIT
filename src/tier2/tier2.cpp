@@ -823,7 +823,7 @@ void build_demo_graph(Graph& g) {
 PassResult run_tier2_pipeline(Tier2Job& job) {
     // Pipeline order matters:
     //   1. TypeNarrowing — establish types first (other passes use them)
-    //   2. CallInlining — inline before optimization (exposes more opportunities)
+    //   2. CallInlining — mark known calls (enables other optimizations)
     //   3. EscapeAnalysis — mark non-escaping allocations
     //   4. GVN — deduplicate before other passes can create dupes
     //   5. ConstantFolding — fold constants
@@ -831,9 +831,11 @@ PassResult run_tier2_pipeline(Tier2Job& job) {
     //   7. ComparisonFolding — fold comparisons
     //   8. BranchFolding — fold constant branches
     //   9. StrengthReduction — replace expensive ops with shifts
-    //  10. LICM — hoist loop-invariant code
+    //  10. LICM — hoist loop-invariant code (uses dominance)
     //  11. LoopUnrolling — unroll hot loops
-    //  12. DCE — clean up dead nodes
+    //  12. GlobalCodeMotion — schedule early (hide latency)
+    //  13. ReachabilityPruning — remove unreachable nodes
+    //  14. DCE — clean up dead pure nodes
     job.pipeline.add(std::make_unique<TypeNarrowingPass>());
     job.pipeline.add(std::make_unique<CallInliningPass>());
     job.pipeline.add(std::make_unique<EscapeAnalysisPass>());
@@ -845,6 +847,12 @@ PassResult run_tier2_pipeline(Tier2Job& job) {
     job.pipeline.add(std::make_unique<StrengthReductionPass>());
     job.pipeline.add(std::make_unique<LICMPass>());
     job.pipeline.add(std::make_unique<LoopUnrollingPass>());
+    // GCM and ReachabilityPruning are disabled for now — they change
+    // control dependencies in a way that the SoN→Tier-1 linearization
+    // doesn't handle correctly. Re-enable after implementing proper
+    // block-based lowering.
+    // job.pipeline.add(std::make_unique<GlobalCodeMotionPass>());
+    // job.pipeline.add(std::make_unique<ReachabilityPruningPass>());
     job.pipeline.add(std::make_unique<DeadCodeElimPass>());
     return job.pipeline.run_to_fixpoint(job.graph, 8);
 }

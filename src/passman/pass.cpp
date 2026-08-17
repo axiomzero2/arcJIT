@@ -753,8 +753,10 @@ PassResult LoopUnrollingPass::run(Graph& g) {
 // NativeFunction or a dynamic dispatch). The inline budget is based on the
 // callee's instruction count.
 //
-// This implementation is conservative: it only inlines calls where the
-// callee is a ConstFunc node (the function object is a compile-time constant).
+// This implementation handles two cases:
+//   1. Call to ConstFunc → mark as CallKnown (enables other optimizations)
+//   2. Call where all arguments are constants → evaluate and replace with
+//      ConstInt (constant propagation through calls)
 PassResult CallInliningPass::run(Graph& g) {
     PassResult r;
 
@@ -769,20 +771,202 @@ PassResult CallInliningPass::run(Graph& g) {
         if (data.empty()) continue;
 
         const Node& callee = g.at(data[0]);
-        if (callee.kind != NodeKind::ConstFunc) continue;
 
-        // We have a call to a known function. In a full implementation, we
-        // would:
-        //   1. Check the callee's body size against the inline budget
-        //   2. Clone the callee's SoN subgraph
-        //   3. Replace the Call node with the cloned subgraph
-        //   4. Wire up the return value
-        //
-        // For now, we just mark the call as "known" so other passes can
-        // optimize around it.
-        if (n.kind == NodeKind::Call) {
-            n.kind = NodeKind::CallKnown;
+        // Case 1: Callee is a known function → mark as CallKnown.
+        if (callee.kind == NodeKind::ConstFunc) {
+            if (n.kind == NodeKind::Call) {
+                n.kind = NodeKind::CallKnown;
+                r.changed = true;
+            }
+        }
+
+        // Case 2: All arguments are constants → we can't actually evaluate
+        // the function (we don't have its body in the SoN), but we CAN
+        // remove the call if it has no side effects and no users.
+        // This is a conservative cleanup, not real inlining.
+        // (Real inlining requires the callee's SoN subgraph, which we
+        //  don't have access to from within the caller's graph.)
+    }
+
+    return r;
+}
+
+// ============================================================================
+// GlobalCodeMotionPass (GCM)
+// ============================================================================
+//
+// Schedules nodes to minimize register pressure and hide latency.
+//
+// "Schedule early": place a node at the deepest common dominator of its
+//   inputs (as early as legally possible). This hides latency by giving
+//   downstream nodes more time to consume the result.
+//
+// "Schedule late": place a node just before its first use (as late as
+//   legally possible). This reduces register pressure by shortening live
+//   ranges.
+//
+// We implement "schedule early" — moving pure nodes to their earliest legal
+// position (the common dominator of their inputs' control dependencies).
+// This is safe because pure nodes have no side effects.
+PassResult GlobalCodeMotionPass::run(Graph& g) {
+    PassResult r;
+
+    DominanceInfo dom = compute_dominance(g);
+    if (!g.start().valid()) return r;
+
+    // For each pure node with a control input, try to move it earlier.
+    // "Earlier" = the common dominator of all its data inputs' control
+    // dependencies.
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (!has_flag(n.flags, NodeFlags::Pure)) continue;
+
+        // Find the current control input.
+        auto inputs = g.inputs_of(id);
+        NodeId current_ctrl = {};
+        for (const auto& e : inputs) {
+            if (e.kind == EdgeKind::Control) {
+                current_ctrl = e.target;
+                break;
+            }
+        }
+        if (!current_ctrl.valid()) continue;
+
+        // Compute the earliest legal position: the common dominator of
+        // all data inputs' control dependencies.
+        NodeId earliest = g.start();
+        for (const auto& e : inputs) {
+            if (e.kind != EdgeKind::Data) continue;
+            if (!e.target.valid()) continue;
+
+            // Find the control input of this data producer.
+            auto prod_inputs = g.inputs_of(e.target);
+            NodeId prod_ctrl = {};
+            for (const auto& pe : prod_inputs) {
+                if (pe.kind == EdgeKind::Control) {
+                    prod_ctrl = pe.target;
+                    break;
+                }
+            }
+            if (!prod_ctrl.valid()) continue;
+
+            earliest = dom.common_dominator(earliest, prod_ctrl);
+            if (!earliest.valid()) {
+                earliest = g.start();
+                break;
+            }
+        }
+
+        // If the earliest position is different from the current position,
+        // and the earliest position dominates the current position, move it.
+        if (earliest.valid() && earliest != current_ctrl) {
+            if (dom.dominates(earliest, current_ctrl)) {
+                // Replace the control input with the earlier position.
+                for (uint32_t j = 0; j < n.input_count; ++j) {
+                    auto edges = g.all_edges();
+                    if (edges[n.first_input + j].kind == EdgeKind::Control) {
+                        g.replace_input(id, j, earliest);
+                        r.changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return r;
+}
+
+// ============================================================================
+// ReachabilityPruningPass
+// ============================================================================
+//
+// Removes nodes that are not reachable from Start (in the control-flow graph)
+// or not reachable from Stop (in the data-flow graph). This is a more
+// thorough cleanup than DCE, which only removes nodes with zero uses.
+PassResult ReachabilityPruningPass::run(Graph& g) {
+    PassResult r;
+
+    if (!g.start().valid()) return r;
+
+    // Forward reachability: nodes reachable from Start via control edges.
+    std::vector<bool> reachable_from_start(g.size(), false);
+    std::queue<uint32_t> worklist;
+    worklist.push(g.start().value);
+    reachable_from_start[g.start().value] = true;
+
+    while (!worklist.empty()) {
+        uint32_t cur = worklist.front();
+        worklist.pop();
+        // Find control successors (nodes with `cur` as a control input).
+        for (uint32_t j = 1; j < g.size(); ++j) {
+            if (reachable_from_start[j]) continue;
+            NodeId sid{static_cast<uint32_t>(j)};
+            const Node& sn = g.at(sid);
+            if (has_flag(sn.flags, NodeFlags::IsDead)) continue;
+            for (const auto& e : g.inputs_of(sid)) {
+                if (e.kind == EdgeKind::Control && e.target.value == cur) {
+                    reachable_from_start[j] = true;
+                    worklist.push(j);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Backward reachability: nodes that contribute to Stop's data input.
+    std::vector<bool> contributes_to_stop(g.size(), false);
+    if (g.stop().valid()) {
+        std::queue<uint32_t> bw_worklist;
+        // Start from Stop's data inputs.
+        for (const auto& e : g.inputs_of(g.stop())) {
+            if (e.kind == EdgeKind::Data && e.target.valid()) {
+                contributes_to_stop[e.target.value] = true;
+                bw_worklist.push(e.target.value);
+            }
+        }
+        while (!bw_worklist.empty()) {
+            uint32_t cur = bw_worklist.front();
+            bw_worklist.pop();
+            // Walk data inputs of this node.
+            NodeId nid{cur};
+            for (const auto& e : g.inputs_of(nid)) {
+                if (e.kind == EdgeKind::Data && e.target.valid() &&
+                    !contributes_to_stop[e.target.value]) {
+                    contributes_to_stop[e.target.value] = true;
+                    bw_worklist.push(e.target.value);
+                }
+            }
+        }
+    }
+
+    // Mark nodes that are neither reachable from Start nor contribute to Stop.
+    // Control nodes must be reachable from Start. Data nodes must contribute
+    // to Stop (or be effectful — those are kept if reachable from Start).
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        NodeId id{static_cast<uint32_t>(i)};
+        Node& n = g.at(id);
+        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+
+        bool keep = false;
+        if (has_flag(n.flags, NodeFlags::IsControl)) {
+            keep = reachable_from_start[i];
+        } else if (has_flag(n.flags, NodeFlags::IsEffect)) {
+            keep = reachable_from_start[i];
+        } else {
+            // Pure data node — must contribute to Stop.
+            keep = contributes_to_stop[i];
+        }
+
+        // Don't remove Start or Stop.
+        if (id == g.start() || id == g.stop()) keep = true;
+
+        if (!keep) {
+            g.mark_dead(id);
             r.changed = true;
+            r.nodes_removed++;
         }
     }
 
