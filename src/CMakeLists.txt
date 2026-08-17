@@ -52,6 +52,8 @@ target_compile_options(arcjit_tier2 PRIVATE -fno-exceptions -fno-rtti -Wall -Wex
 target_link_libraries(arcjit_tier2 PUBLIC
     arcjit_core
     arcjit_passman
+    arcjit_tier1
+    asmjit::asmjit
 )
 
 # --- Runtime (orchestrator, interpreter, thread pool) ----------------------

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // arcJIT — Arc heap object header.
 //
-// Mirrors `include/object.h` from the upstream Arc repo. We only declare the
-// pieces the JIT actually needs to inspect or mutate (shape, type tag,
-// refcount). Full object kinds (String, List, Function, ...) are accessible
-// via downcast through the `ObjType` enum.
+// Mirrors `include/object.h` from the upstream Arc repo. We declare only the
+// C-layout-compatible headers (Object, Number, String, List) that the JIT
+// needs to inspect from C-layout memory. Higher-level Arc types (Function,
+// Class, Instance, NativeFunction) are defined in `heap.h` because they own
+// C++ resources (std::string, std::vector, SymbolTable).
 #pragma once
 
 #include <cstddef>
@@ -45,10 +46,11 @@ struct Object {
 
 static_assert(std::is_standard_layout_v<Object>);
 
-// --- Concrete object shapes --------------------------------------------------
+// --- C-layout-compatible structs (used when we need stable offsetof) --------
 //
-// We mirror Arc's concrete types so the JIT can inline field loads/stores.
-// All layouts must match the upstream `object.h` exactly.
+// These match Arc's `include/object.h` layouts exactly. The higher-level
+// C++ wrappers (ArcFunction, ArcClass, ArcInstance, ArcNative) live in
+// `heap.h` because they own C++ resources.
 
 struct Number {
     Object base;
@@ -75,43 +77,22 @@ struct List {
     uint64_t   capacity;
 };
 
-struct Function {
-    Object   base;
-    char*    name;
-    char**   params;
-    size_t   param_count;
-    void*    body;        // ASTNode* (opaque to the JIT)
-    void*    chunk;       // Chunk* (opaque to the JIT)
-    int      max_locals;
-};
+// --- Helpers for downcasting from Object* to a specific kind ---------------
+// These reinterpret_casts are safe because the C-layout structs above have
+// `Object base;` as their first member (standard-layout guarantee).
+//
+// We use the name `cast_to<T>` rather than `as<T>` to avoid clashing with
+// `Value::as` (the union member accessor).
 
-struct NativeFunction {
-    Object   base;
-    char*    name;
-    Object* (*function)(Object** args, size_t arg_count);
-    bool     is_variadic;
-    size_t   required_arg_count;
-};
+template <typename T>
+[[nodiscard]] inline T* cast_to(Object* o) noexcept {
+    return reinterpret_cast<T*>(o);
+}
 
-struct Class {
-    Object   base;
-    char*    name;
-    void*    chunk;       // Chunk* (opaque)
-    int      max_locals;
-};
-
-struct SymbolTable;  // opaque forward decl from Arc; we only use it as void*
-
-struct Instance {
-    Object         base;
-    Class*         klass;
-    SymbolTable*   fields;
-};
-
-struct ProgramError {
-    Object   base;
-    char*    details;
-};
+template <typename T>
+[[nodiscard]] inline const T* cast_to(const Object* o) noexcept {
+    return reinterpret_cast<const T*>(o);
+}
 
 // Note: `Value::is_truthy()` is declared in value.h but defined in value.cpp
 // (because it depends on the Object/String/List/Number layouts defined here).

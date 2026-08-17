@@ -1,31 +1,24 @@
 // SPDX-License-Identifier: MIT
-// arcJIT — Tier-1 baseline SSA JIT.
+// arcJIT — Tier-1 baseline SSA JIT IR.
 //
-// Per docs/ARCHITECTURE.md §1.2, Tier 1 is the "fast path" generator. It
-// takes a hot Arc chunk + Tier-0 profiles, lowers the stack bytecode to a
-// small SSA-style IR, runs Linear Scan register allocation, and emits x86-64
-// machine code via asmjit. No heavy optimizations.
+// A flat list of instructions with explicit basic-block boundaries via Labels.
+// Each instruction has up to 3 virtual register operands (dst, src1, src2)
+// plus a payload (for constants, local slots, jump targets, etc.).
 //
-// For the scaffold, we implement a single example pattern: an "add two locals"
-// function that returns `a + b`. This demonstrates the full pipeline:
-//   bytecode → SSA IR → linear scan → asmjit → execute.
+// The IR is intentionally low-level — close enough to x86-64 that asmjit
+// emission is mechanical, but high enough that the linear-scan allocator
+// has good live-range granularity.
 #pragma once
 
 #include <cstdint>
 #include <expected>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
 #include "bytecode/chunk.h"
 #include "bytecode/value.h"
 
-// We include asmjit here directly. The build system links asmjit::asmjit.
-//
-// We use the modern per-target headers (`asmjit/x86.h` + `asmjit/core.h`) and
-// wrap the include with pragma push/pop because asmjit uses anonymous structs
-// that trip -Wpedantic. The rest of our code keeps -Wpedantic enabled.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #include <asmjit/core.h>
@@ -34,37 +27,92 @@
 
 namespace arcjit {
 
-// --- SSA-style IR for Tier 1 ------------------------------------------------
+// --- IR opcodes -------------------------------------------------------------
 //
-// A simple linear SSA IR: one instruction per line, virtual registers as IDs.
-// This is *not* the Sea of Nodes IR — Tier 1 uses a flat list with explicit
-// basic-block boundaries. SoN is reserved for Tier 2.
-//
-enum class Tier1Op {
-    LoadConst,    // dst = constants[payload]
-    LoadLocal,    // dst = locals[payload]
-    StoreLocal,   // locals[payload] = src1
-    Add,          // dst = src1 + src2  (int fast path)
-    Sub,
-    Mul,
-    Cmp,          // dst = compare(src1, src2, mode)
-    Return,       // return src1
-    Jump,
-    BranchIfFalse,
+// Every Arc opcode maps to one or more Tier1Ops. Some (Call, Branch) require
+// multiple machine instructions to lower.
+enum class Tier1Op : uint8_t {
+    // Constants / moves
+    LoadConst,        // dst = constants[payload]
+    LoadConstImm,     // dst = payload (sign-extended to 64-bit)
+    LoadLocal,        // dst = locals[payload]
+    StoreLocal,       // locals[payload] = src1
+    LoadVar,          // dst = globals[payload]  (string name index)
+    StoreVar,         // globals[payload] = src1
+    Mov,              // dst = src1
+
+    // Arithmetic (int fast path)
+    Add,              // dst = src1 + src2
+    Sub, Mul,
+    Div,              // dst = src1 / src2 (float result)
+    Pow,              // dst = pow(src1, src2)
+    Neg,              // dst = -src1
+
+    // Comparisons (produce 0 or 1)
+    Eq, Ne, Lt, Gt, Lte, Gte,
+
+    // Logical
+    And, Or, Not,     // Not: dst = !src1
+
+    // Type checks / conversions
+    IsTruthy,         // dst = is_truthy(src1)
+    ToFloat,          // dst = (double)src1
+
+    // Memory (heap objects)
+    AllocList,        // dst = new List, capacity = src1
+    ListAppend,       // list_obj = src1, elem = src2
+    ListGet,          // dst = src1[src2]
+    ListSet,          // src1[src2] = src3 (no dst)
+    AllocInstance,    // dst = new Instance(klass = payload)
+    GetField,         // dst = src1.fields[payload]
+    SetField,         // src1.fields[payload] = src2
+
+    // Calls
+    Call,             // dst = call(callee=src1, args=locals[payload..payload+n])
+    CallNative,       // dst = call native fn at payload
+    Return,           // return src1
+
+    // Control flow
+    Label,            // marker — payload is label ID
+    Jump,             // jump to label payload
+    BranchIfFalse,    // if (!src1) jump to label payload
+    BranchIfTrue,     // if (src1) jump to label payload
+    Halt,             // stop execution
 };
 
+// A single IR instruction. 20 bytes (enum + 3-byte pad + 4×uint32).
 struct Tier1Inst {
-    Tier1Op op;
-    uint32_t dst      = 0;       // virtual register ID for the destination
-    uint32_t src1     = 0;
-    uint32_t src2     = 0;
-    uint32_t payload   = 0;       // const/local index
+    Tier1Op   op;
+    uint8_t   _pad[3];
+    uint32_t  dst;        // destination vreg (0 = no destination)
+    uint32_t  src1;       // first source vreg
+    uint32_t  src2;       // second source vreg
+    uint32_t  payload;    // kind-specific data (const idx, slot, label, imm)
 };
+static_assert(sizeof(Tier1Inst) == 20);
 
+// A function in Tier-1 IR form.
 struct Tier1Function {
-    std::vector<Tier1Inst> insts;
-    uint32_t                vreg_count = 0;
-    int                     max_locals = 0;
+    std::vector<Tier1Inst>  insts;
+    std::vector<std::string> label_names;  // for debugging
+    uint32_t                vreg_count   = 0;
+    uint32_t                label_count  = 0;
+    int                     max_locals   = 0;
+    int                     num_params   = 0;
+    std::string             name;
+    const Chunk*            source_chunk = nullptr;
+
+    // Allocate a new virtual register.
+    uint32_t alloc_vreg() { return ++vreg_count; }
+
+    // Allocate a new label ID.
+    uint32_t alloc_label() { return label_count++; }
+
+    // Emit an instruction.
+    void emit(Tier1Op op, uint32_t dst = 0, uint32_t src1 = 0, uint32_t src2 = 0,
+              uint32_t payload = 0) {
+        insts.push_back({op, {0, 0, 0}, dst, src1, src2, payload});
+    }
 };
 
 // --- Linear Scan register allocator ----------------------------------------
@@ -77,13 +125,12 @@ struct LiveInterval {
 
 struct RegAllocResult {
     std::vector<LiveInterval> intervals;
-    std::vector<int>          vreg_to_phys;     // size = vreg_count
-    std::vector<int>          vreg_to_stack;    // size = vreg_count, -1 if in reg
+    std::vector<int>          vreg_to_phys;     // size = vreg_count + 1
+    std::vector<int>          vreg_to_stack;    // size = vreg_count + 1, -1 if in reg
+    int                       max_stack_slots = 0;
 };
 
-// Run linear-scan allocation on a Tier1Function. Uses x86-64 GP regs:
-//   rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11 (caller-saved, scratch)
-//   rbx, r12, r13, r14, r15 (callee-saved, for spilled)
+// Run linear-scan allocation on a Tier1Function. Uses x86-64 GP regs.
 RegAllocResult linear_scan(const Tier1Function& fn);
 
 // --- asmjit emission --------------------------------------------------------
@@ -92,10 +139,11 @@ public:
     Tier1Compiler();
 
     // Compile a Tier1Function to executable machine code.
-    // Returns a pointer to the entry point, or an error string.
-    [[nodiscard]] std::expected<void(*)(), std::string> compile(const Tier1Function& fn);
+    // The entry point takes a pointer to a "Tier1Context" struct (passed in
+    // rdi) holding locals array, globals table, and constants pool.
+    [[nodiscard]] std::expected<int64_t (*)(void*), std::string>
+    compile(const Tier1Function& fn);
 
-    // Release the code memory (called automatically by destructor).
     void release() { runtime_.reset(); }
 
 private:
@@ -104,11 +152,14 @@ private:
 };
 
 // --- Convenience: synthesize a Tier1Function that computes `a + b + c` ------
-//
-// This is the demo case for end-to-end Tier-1 execution. Real lowering from
-// Arc bytecode would walk the Chunk and emit Tier1Inst per opcode; that
-// machinery is sketched but not wired in this initial milestone.
-//
 Tier1Function make_demo_add3();
+
+// --- Lowering: Arc Chunk → Tier1Function -----------------------------------
+//
+// Walks the bytecode, maintains a virtual stack of vreg IDs, and emits one
+// or more Tier1Inst per Arc opcode. Resolves forward jump targets via a
+// fixup pass at the end.
+[[nodiscard]] std::expected<Tier1Function, std::string>
+lower_chunk_to_tier1(const Chunk& chunk, std::string_view name);
 
 }  // namespace arcjit

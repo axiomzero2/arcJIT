@@ -124,6 +124,20 @@ public:
     [[nodiscard]] std::span<Object* const>  constants() const noexcept { return constants_; }
     [[nodiscard]] std::span<const PosEntry> positions() const noexcept { return positions_; }
 
+    // --- Mutation (used by patch-up passes) --------------------------------
+    // Patch a single byte at the given offset. Used by the lowering passes
+    // to fix forward jumps after their target offset becomes known.
+    void patch_byte(size_t offset, uint8_t b) {
+        if (offset < code_.size()) code_[offset] = b;
+    }
+    void patch_short(size_t offset, int16_t v) {
+        if (offset + 1 < code_.size()) {
+            uint16_t u = static_cast<uint16_t>(v);
+            code_[offset]     = static_cast<uint8_t>((u >> 8) & 0xFF);
+            code_[offset + 1] = static_cast<uint8_t>(u & 0xFF);
+        }
+    }
+
     [[nodiscard]] size_t code_size() const noexcept { return code_.size(); }
     [[nodiscard]] int    max_locals() const noexcept { return max_locals_; }
 

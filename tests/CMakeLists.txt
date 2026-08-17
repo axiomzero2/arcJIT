@@ -21,6 +21,7 @@ add_executable(arcjit_tests
     test_tier1.cpp
     test_tier2.cpp
     test_interp.cpp
+    test_runtime.cpp
 )
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)
 target_compile_options(arcjit_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-error)

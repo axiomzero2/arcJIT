@@ -17,10 +17,10 @@ bool Value::is_truthy() const noexcept {
         case ValueType::Obj: {
             if (!as.obj) return false;
             switch (as.obj->type) {
-                case ObjType::String:      return reinterpret_cast<const String*>(as.obj)->len > 0;
-                case ObjType::List:        return reinterpret_cast<const List*>(as.obj)->size > 0;
-                case ObjType::NumberInt:   return reinterpret_cast<const Number*>(as.obj)->as.i != 0;
-                case ObjType::NumberFloat: return reinterpret_cast<const Number*>(as.obj)->as.f != 0.0;
+                case ObjType::String:      return cast_to<String>(as.obj)->len > 0;
+                case ObjType::List:        return cast_to<List>(as.obj)->size > 0;
+                case ObjType::NumberInt:   return cast_to<Number>(as.obj)->as.i != 0;
+                case ObjType::NumberFloat: return cast_to<Number>(as.obj)->as.f != 0.0;
                 default:                   return true;
             }
         }
