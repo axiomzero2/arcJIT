@@ -27,6 +27,7 @@
 #include "bytecode/object.h"
 #include "bytecode/symbol_table.h"
 #include "bytecode/value.h"
+#include "machinery/meter.h"
 #include "runtime/profile.h"
 #include "runtime/safepoint.h"
 
@@ -155,6 +156,11 @@ public:
     [[nodiscard]] const FunctionProfile* profile() const noexcept { return profile_.get(); }
     void attach_profile(std::shared_ptr<FunctionProfile> p) { profile_ = std::move(p); }
 
+    // Attach a Meter for confidence tracking. When set, the interpreter
+    // feeds profile samples into the Meter, which computes confidence
+    // levels for speculation decisions.
+    void attach_meter(Meter* m) { meter_ = m; }
+
     // --- Hot-function detection (drives the tier ladder) -------------------
     [[nodiscard]] bool is_hot(const Chunk& /*chunk*/) const noexcept {
         return profile_ && profile_->invocations() >= kHotThreshold;
@@ -181,6 +187,7 @@ private:
     MutatorState             mutator_state_;
     std::unique_ptr<SymbolTable> globals_;
     std::shared_ptr<FunctionProfile> profile_;
+    Meter*                   meter_ = nullptr;  // optional — for confidence tracking
 
     // --- Stack helpers ------------------------------------------------------
     void push_(Value v) { stack_.push_back(v); }
@@ -190,6 +197,15 @@ private:
 
     void record_feedback_(uint32_t offset, const Value& v) {
         if (profile_) profile_->at(offset).observe(v);
+        // Feed into Meter for confidence tracking.
+        if (meter_) {
+            auto& e = meter_->entry_for(offset);
+            uint64_t type_tag = static_cast<uint64_t>(v.type);
+            uint64_t shape_tag = v.is_obj() && v.as_obj()
+                                  ? static_cast<uint64_t>(v.as_obj()->type)
+                                  : 0;
+            e.record_sample(type_tag, shape_tag);
+        }
     }
 
     // --- Variable lookup (walks the frame chain) ---------------------------

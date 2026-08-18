@@ -118,6 +118,7 @@ Runtime::Runtime() {
 
     interp_ = std::make_unique<Interpreter>();
     interp_->attach_safepoint(&safepoint_mgr_);
+    interp_->attach_meter(meter_.get());
 }
 
 Runtime::~Runtime() = default;

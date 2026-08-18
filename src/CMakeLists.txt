@@ -9,7 +9,7 @@ target_include_directories(arcjit_bytecode PUBLIC .)
 target_compile_features(arcjit_bytecode PUBLIC cxx_std_23)
 target_compile_options(arcjit_bytecode PRIVATE -Wall -Wextra -Wpedantic)
 
-# --- Machinery (Watchdog, Meter, Probe, Regulator, Fuse, Trip, Capacitor, Relay)
+# --- Machinery (Watchdog, Meter, Probe, Regulator, Fuse, Trip, Capacitor, Relay, GroundFault, Governor)
 add_library(arcjit_machinery STATIC
     machinery/watchdog.cpp
     machinery/meter.cpp
@@ -19,6 +19,8 @@ add_library(arcjit_machinery STATIC
     machinery/trip.cpp
     machinery/capacitor.cpp
     machinery/relay.cpp
+    machinery/ground_fault.cpp
+    machinery/governor.cpp
 )
 target_include_directories(arcjit_machinery PUBLIC .)
 target_compile_features(arcjit_machinery PUBLIC cxx_std_23)
