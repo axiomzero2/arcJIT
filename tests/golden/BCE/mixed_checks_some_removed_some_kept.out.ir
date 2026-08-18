@@ -1,6 +1,6 @@
 // graph: 5 nodes, start=n0, stop=n0
-n1 = ConstInt(3)  [type=Int, pure, gvn]  ; uses=1
-n2 = ConstInt(15)  [type=Int, pure, gvn]  ; uses=1
-n3 = ConstInt(10)  [type=Int, pure, gvn]  ; uses=2
-; dead: n4 = CheckBounds(data:n1, data:n3)  [type=Bool, guard, dead]  ; uses=0
-n5 = CheckBounds(data:n2, data:n3)  [type=Bool, guard]  ; uses=0
+n1 = ConstInt(3)  [type=Int, Pure | GVNable]  ; uses=1
+n2 = ConstInt(15)  [type=Int, Pure | GVNable]  ; uses=1
+n3 = ConstInt(10)  [type=Int, Pure | GVNable]  ; uses=2
+; dead: n4 = CheckBounds(data:n1, data:n3)  [type=Bool, IsGuard | IsDead]  ; uses=0
+n5 = CheckBounds(data:n2, data:n3)  [type=Bool, IsGuard]  ; uses=0

@@ -1,4 +1,4 @@
 // graph: 3 nodes, start=n1, stop=n0
-n1 = Start  [type=Bottom, control]  ; uses=1
-n2 = Loop(ctrl:n1)  [type=Bottom, control]  ; uses=1
-n3 = Loop(ctrl:n2)  [type=Bottom, control]  ; uses=0
+n1 = Start  [type=Bottom, IsControl]  ; uses=1
+n2 = Loop(ctrl:n1)  [type=Bottom, IsControl]  ; uses=1
+n3 = Loop(ctrl:n2)  [type=Bottom, IsControl]  ; uses=0

@@ -45,9 +45,9 @@ TEST(IRDumpTest, dumps_flags) {
                NodeFlags::Pure | NodeFlags::GVNable | NodeFlags::CSEable,
                TypeId::Int, 1, {});
     std::string s = dump_graph_text(g);
-    EXPECT_NE(s.find("pure"), std::string::npos);
-    EXPECT_NE(s.find("gvn"), std::string::npos);
-    EXPECT_NE(s.find("cse"), std::string::npos);
+    EXPECT_NE(s.find("Pure"), std::string::npos);
+    EXPECT_NE(s.find("GVNable"), std::string::npos);
+    EXPECT_NE(s.find("CSEable"), std::string::npos);
 }
 
 TEST(IRDumpTest, dumps_type) {

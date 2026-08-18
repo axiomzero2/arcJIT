@@ -26,7 +26,7 @@ target_include_directories(arcjit_machinery PUBLIC .)
 target_compile_features(arcjit_machinery PUBLIC cxx_std_23)
 target_compile_options(arcjit_machinery PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
 
-# --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay, Dominance)
+# --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay, Dominance, Bitmask)
 add_library(arcjit_core STATIC
     core/node.cpp
     core/graph.cpp
@@ -34,6 +34,7 @@ add_library(arcjit_core STATIC
     core/verifier.cpp
     core/replay.cpp
     core/dominance.cpp
+    core/bitmask.cpp
 )
 target_include_directories(arcjit_core PUBLIC .)
 target_compile_features(arcjit_core PUBLIC cxx_std_23)

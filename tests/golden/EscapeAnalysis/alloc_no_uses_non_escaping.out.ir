@@ -1,2 +1,2 @@
 // graph: 1 nodes, start=n0, stop=n0
-n1 = Allocate  [type=Object, pinned, effect]  ; uses=0
+n1 = Allocate  [type=Object, IsPinned | IsEffect]  ; uses=0

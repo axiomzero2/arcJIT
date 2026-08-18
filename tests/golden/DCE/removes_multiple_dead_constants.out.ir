@@ -1,4 +1,4 @@
 // graph: 3 nodes, start=n0, stop=n0
-; dead: n1 = ConstInt(1)  [type=Int, pure, dead]  ; uses=0
-; dead: n2 = ConstInt(2)  [type=Int, pure, dead]  ; uses=0
-; dead: n3 = ConstInt(3)  [type=Int, pure, dead]  ; uses=0
+; dead: n1 = ConstInt(1)  [type=Int, Pure | IsDead]  ; uses=0
+; dead: n2 = ConstInt(2)  [type=Int, Pure | IsDead]  ; uses=0
+; dead: n3 = ConstInt(3)  [type=Int, Pure | IsDead]  ; uses=0

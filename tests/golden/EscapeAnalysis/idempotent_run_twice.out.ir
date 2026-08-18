@@ -1,4 +1,4 @@
 // graph: 3 nodes, start=n1, stop=n0
-n1 = Start  [type=Bottom, control]  ; uses=3
-n2 = Allocate(ctrl:n1, effect:n1)  [type=Object, pinned, effect]  ; uses=2
-n3 = LoadField(data:n2, ctrl:n1, effect:n2)  [type=Int, effect]  ; uses=0
+n1 = Start  [type=Bottom, IsControl]  ; uses=3
+n2 = Allocate(ctrl:n1, effect:n1)  [type=Object, IsPinned | IsEffect]  ; uses=2
+n3 = LoadField(data:n2, ctrl:n1, effect:n2)  [type=Int, IsEffect]  ; uses=0

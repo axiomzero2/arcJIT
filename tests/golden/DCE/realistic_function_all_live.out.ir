@@ -1,6 +1,6 @@
 // graph: 5 nodes, start=n1, stop=n5
-n1 = Start  [type=Bottom, control]  ; uses=2
-n2 = ConstInt(1)  [type=Int, pure]  ; uses=1
-n3 = ConstInt(2)  [type=Int, pure]  ; uses=1
-n4 = Add(data:n2, data:n3, ctrl:n1)  [type=Int, pure]  ; uses=1
-n5 = Stop(data:n4, ctrl:n1)  [type=Bottom, control]  ; uses=0
+n1 = Start  [type=Bottom, IsControl]  ; uses=2
+n2 = ConstInt(1)  [type=Int, Pure]  ; uses=1
+n3 = ConstInt(2)  [type=Int, Pure]  ; uses=1
+n4 = Add(data:n2, data:n3, ctrl:n1)  [type=Int, Pure]  ; uses=1
+n5 = Stop(data:n4, ctrl:n1)  [type=Bottom, IsControl]  ; uses=0

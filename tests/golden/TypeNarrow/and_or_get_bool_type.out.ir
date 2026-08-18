@@ -1,5 +1,5 @@
 // graph: 4 nodes, start=n0, stop=n0
-n1 = ConstInt(1)  [type=Int, pure]  ; uses=2
-n2 = ConstInt  [type=Int, pure]  ; uses=2
-n3 = And(data:n1, data:n2)  [type=Bool, pure]  ; uses=0
-n4 = Or(data:n1, data:n2)  [type=Bool, pure]  ; uses=0
+n1 = ConstInt(1)  [type=Int, Pure]  ; uses=2
+n2 = ConstInt  [type=Int, Pure]  ; uses=2
+n3 = And(data:n1, data:n2)  [type=Bool, Pure]  ; uses=0
+n4 = Or(data:n1, data:n2)  [type=Bool, Pure]  ; uses=0

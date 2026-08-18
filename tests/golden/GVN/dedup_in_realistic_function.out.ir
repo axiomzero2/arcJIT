@@ -1,6 +1,6 @@
 // graph: 5 nodes, start=n1, stop=n5
-n1 = Start  [type=Bottom, control]  ; uses=2
-n2 = ConstInt(7)  [type=Int, pure, gvn]  ; uses=2
-; dead: n3 = ConstInt(7)  [type=Int, pure, gvn, dead]  ; uses=0
-n4 = Add(data:n2, data:n2, ctrl:n1)  [type=Int, pure, gvn, commut]  ; uses=1
-n5 = Stop(data:n4, ctrl:n1)  [type=Bottom, control]  ; uses=0
+n1 = Start  [type=Bottom, IsControl]  ; uses=2
+n2 = ConstInt(7)  [type=Int, Pure | GVNable]  ; uses=2
+; dead: n3 = ConstInt(7)  [type=Int, Pure | GVNable | IsDead]  ; uses=0
+n4 = Add(data:n2, data:n2, ctrl:n1)  [type=Int, Pure | GVNable | Commutative]  ; uses=1
+n5 = Stop(data:n4, ctrl:n1)  [type=Bottom, IsControl]  ; uses=0

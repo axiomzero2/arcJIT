@@ -1,5 +1,5 @@
 // graph: 4 nodes, start=n1, stop=n0
-n1 = Start  [type=Bottom, control]  ; uses=3
-n2 = Allocate(ctrl:n1, effect:n1)  [type=Object, pinned, effect]  ; uses=2
-n3 = ConstInt(42)  [type=Int, pure]  ; uses=1
-n4 = StoreField(data:n2, data:n3, ctrl:n1, effect:n2)  [type=Bottom, effect]  ; uses=0
+n1 = Start  [type=Bottom, IsControl]  ; uses=3
+n2 = Allocate(ctrl:n1, effect:n1)  [type=Object, IsPinned | IsEffect]  ; uses=2
+n3 = ConstInt(42)  [type=Int, Pure]  ; uses=1
+n4 = StoreField(data:n2, data:n3, ctrl:n1, effect:n2)  [type=Bottom, IsEffect]  ; uses=0

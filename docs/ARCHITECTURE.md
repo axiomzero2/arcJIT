@@ -822,6 +822,28 @@ exception behavior.
 Profile caches, code caches, serialized snapshots, AOT artifacts, and compiled
 metadata must all be versioned.
 
+### Rule 51 — All orthogonal boolean state must be bitmasked
+Any set of independent boolean properties on a hot-path data structure must
+be represented as a bitmask with type-safe `Flags<E>` wrappers. Raw integers
+are forbidden for flag-like state. All bitmask types must have symbolic
+printing, debugger visualizers, and compile-time validation.
+
+Exceptions require documented justification (e.g., payload data,
+non-orthogonal state, debugging-only fields).
+
+### Rule 52 — No easy fixes — only correctness-preserving performance fixes
+When fixing a bug, performance regression, or correctness issue, you must
+implement the fix that **simultaneously preserves or improves runtime
+performance AND maintains full semantic correctness**.
+
+"Easy" fixes that sacrifice either property are forbidden unless explicitly
+documented as temporary mitigations with tracking issues and removal deadlines.
+
+Every fix must include:
+1. Proof of correctness (test + reasoning)
+2. Performance validation (benchmark or analytical argument)
+3. Explanation of why easier alternatives were rejected
+
 ---
 
 ## 10. Debugging tools

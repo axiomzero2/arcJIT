@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "core/ir_dump.h"
+#include "core/bitmask.h"
 
 #include <format>
 #include <print>
@@ -39,27 +40,7 @@ std::string_view edge_kind_name(EdgeKind k) noexcept {
 }
 
 std::string flags_string(NodeFlags f) noexcept {
-    std::string s;
-    auto add = [&](const char* name, NodeFlags mask) {
-        if (has_flag(f, mask)) {
-            if (!s.empty()) s += ", ";
-            s += name;
-        }
-    };
-    add("pure", NodeFlags::Pure);
-    add("cse", NodeFlags::CSEable);
-    add("gvn", NodeFlags::GVNable);
-    add("commut", NodeFlags::Commutative);
-    add("nothrow", NodeFlags::NoThrow);
-    add("nodeopt", NodeFlags::NoDeopt);
-    add("hasfs", NodeFlags::HasFrameState);
-    add("alloc", NodeFlags::IsAllocated);
-    add("pinned", NodeFlags::IsPinned);
-    add("guard", NodeFlags::IsGuard);
-    add("control", NodeFlags::IsControl);
-    add("effect", NodeFlags::IsEffect);
-    add("dead", NodeFlags::IsDead);
-    return s;
+    return format_node_flags(static_cast<uint32_t>(f));
 }
 
 // Format the inputs list: "data:n2, data:n3, ctrl:n1"

@@ -46,6 +46,7 @@ add_executable(arcjit_tests
     test_machinery.cpp
     test_machinery_wiring.cpp
     test_ground_fault_governor.cpp
+    test_bitmask.cpp
 )
 target_include_directories(arcjit_tests PRIVATE .)
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)

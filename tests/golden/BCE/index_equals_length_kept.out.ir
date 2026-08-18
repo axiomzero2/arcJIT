@@ -1,4 +1,4 @@
 // graph: 3 nodes, start=n0, stop=n0
-n1 = ConstInt(10)  [type=Int, pure, gvn]  ; uses=1
-n2 = ConstInt(10)  [type=Int, pure, gvn]  ; uses=1
-n3 = CheckBounds(data:n1, data:n2)  [type=Bool, guard]  ; uses=0
+n1 = ConstInt(10)  [type=Int, Pure | GVNable]  ; uses=1
+n2 = ConstInt(10)  [type=Int, Pure | GVNable]  ; uses=1
+n3 = CheckBounds(data:n1, data:n2)  [type=Bool, IsGuard]  ; uses=0

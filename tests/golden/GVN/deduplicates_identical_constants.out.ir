@@ -1,3 +1,3 @@
 // graph: 2 nodes, start=n0, stop=n0
-n1 = ConstInt(7)  [type=Int, pure, gvn]  ; uses=0
-; dead: n2 = ConstInt(7)  [type=Int, pure, gvn, dead]  ; uses=0
+n1 = ConstInt(7)  [type=Int, Pure | GVNable]  ; uses=0
+; dead: n2 = ConstInt(7)  [type=Int, Pure | GVNable | IsDead]  ; uses=0

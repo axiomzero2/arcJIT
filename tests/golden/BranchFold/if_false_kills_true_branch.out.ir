@@ -1,6 +1,6 @@
 // graph: 5 nodes, start=n1, stop=n0
-n1 = Start  [type=Bottom, control]  ; uses=1
-n2 = ConstInt  [type=Int, pure, gvn]  ; uses=1
-n3 = If(data:n2, ctrl:n1)  [type=Bottom, nodeopt, control]  ; uses=2
-; dead: n4 = IfTrue(ctrl:n3)  [type=Bottom, nodeopt, control, dead]  ; uses=0
-n5 = IfFalse(ctrl:n3)  [type=Bottom, nodeopt, control]  ; uses=0
+n1 = Start  [type=Bottom, IsControl]  ; uses=1
+n2 = ConstInt  [type=Int, Pure | GVNable]  ; uses=1
+n3 = If(data:n2, ctrl:n1)  [type=Bottom, NoDeopt | IsControl]  ; uses=2
+; dead: n4 = IfTrue(ctrl:n3)  [type=Bottom, NoDeopt | IsControl | IsDead]  ; uses=0
+n5 = IfFalse(ctrl:n3)  [type=Bottom, NoDeopt | IsControl]  ; uses=0
