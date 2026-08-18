@@ -9,6 +9,21 @@ target_include_directories(arcjit_bytecode PUBLIC .)
 target_compile_features(arcjit_bytecode PUBLIC cxx_std_23)
 target_compile_options(arcjit_bytecode PRIVATE -Wall -Wextra -Wpedantic)
 
+# --- Machinery (Watchdog, Meter, Probe, Regulator, Fuse, Trip, Capacitor, Relay)
+add_library(arcjit_machinery STATIC
+    machinery/watchdog.cpp
+    machinery/meter.cpp
+    machinery/probe.cpp
+    machinery/regulator.cpp
+    machinery/fuse.cpp
+    machinery/trip.cpp
+    machinery/capacitor.cpp
+    machinery/relay.cpp
+)
+target_include_directories(arcjit_machinery PUBLIC .)
+target_compile_features(arcjit_machinery PUBLIC cxx_std_23)
+target_compile_options(arcjit_machinery PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
+
 # --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay, Dominance)
 add_library(arcjit_core STATIC
     core/node.cpp
@@ -76,6 +91,7 @@ target_link_libraries(arcjit_runtime PUBLIC
     arcjit_passman
     arcjit_tier1
     arcjit_tier2
+    arcjit_machinery
     enkiTS
 )
 

@@ -43,12 +43,14 @@ add_executable(arcjit_tests
     test_deopt_validator.cpp
     test_fuzzer.cpp
     test_dominance.cpp
+    test_machinery.cpp
 )
 target_include_directories(arcjit_tests PRIVATE .)
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)
 target_compile_options(arcjit_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
 target_link_libraries(arcjit_tests PRIVATE
     arcjit_runtime
+    arcjit_machinery
     GTest::gtest_main
 )
 
