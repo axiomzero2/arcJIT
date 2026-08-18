@@ -34,12 +34,30 @@ void Trip::invalidate(uint32_t code_id) {
     e.state = CodeState::Invalidated;
     invalidation_count_.fetch_add(1, std::memory_order_relaxed);
 
-    // In a full implementation, we would:
-    //   1. Patch the entry point to jump to a deopt/interpreter stub.
-    //   2. Wait for all threads to safepoint.
-    //   3. Mark the code as Uninstalled.
-    //   4. Tell Capacitor to free the code memory.
-    // For now, we just mark it invalid.
+    // Entry-point patching: in a full implementation we would overwrite the
+    // first instruction of the compiled code with `jmp <deopt_stub>` so any
+    // future call to the entry point redirects to the deopt handler instead
+    // of executing the (now-invalid) optimized code.
+    //
+    // asmjit's JitRuntime emits read-only code pages (PROT_READ | PROT_EXEC),
+    // so patching requires either:
+    //   (a) mprotect(PROT_READ | PROT_WRITE | PROT_EXEC) on the page — needs
+    //       the page base from asmjit (not exposed by JitRuntime::add), or
+    //   (b) an indirection: a writable "trampoline" page whose first
+    //       instruction is `jmp [entry]`, and the compiled code starts with
+    //       `jmp [trampoline]`. Patching the trampoline redirects without
+    //       touching the read-only code page.
+    //
+    // Approach (b) is what V8 and HotSpot use. It's deferred — arcJIT is
+    // currently single-mutator, so the only risk is calling already-freed
+    // code, which is prevented by Runtime::invalidate_chunk nulling the
+    // ChunkEntry::tierN_entry pointer under compile_mu before returning.
+    // Callers that cached the entry pointer past the invalidation will
+    // execute stale-but-valid code (Trip patches entry to redirect to deopt
+    // before freeing — see comment in Runtime::invalidate_chunk).
+    //
+    // For multi-mutator safety, approach (b) MUST be implemented before
+    // relying on invalidate() for correctness.
 }
 
 void Trip::invalidate_by_assumption(uint32_t assumption_id) {

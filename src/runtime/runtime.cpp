@@ -143,6 +143,17 @@ ChunkEntry& Runtime::entry_for_(const Chunk& chunk) {
 void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
     uint32_t inv = entry.invocations.load(std::memory_order_relaxed);
 
+    // Sampled Capacitor aging: age all allocations every ~256 slow-path
+    // entries. The slow path runs when we're considering compilation, so
+    // it's a natural place to do periodic housekeeping. Aging lets
+    // Capacitor::evict_cold identify code that hasn't been called recently.
+    // (The previous implementation never called age_all — hot/cold
+    // classification was dead code.)
+    static thread_local uint32_t age_counter = 0;
+    if ((++age_counter & 0xFF) == 0) {
+        capacitor_->age_all();
+    }
+
     // Tier 0 → Tier 1
     if (inv >= kHotThreshold
         && entry.current_tier.load(std::memory_order_acquire) == Tier::Interpreter
@@ -207,6 +218,19 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         CompiledEntry e2 = entry.tier2_entry;
         if (e2) {
             stats_.tier2_invocations.fetch_add(1, std::memory_order_relaxed);
+            // Sampled Capacitor hit-tracking: 1/1024 calls pay the mutex
+            // cost to update hot/cold stats. This is enough signal for
+            // eviction decisions without adding per-call mutex overhead.
+            // (The previous implementation never called record_hit at all
+            // — hot/cold logic was dead code.)
+            //
+            // We use a thread-local counter (not the atomic) for the
+            // sampling decision — reading the atomic would force a memory
+            // barrier on every call, defeating the relaxed optimization.
+            static thread_local uint32_t t2_hit_counter = 0;
+            if ((++t2_hit_counter & 0x3FF) == 0) {
+                capacitor_->record_hit(reinterpret_cast<void*>(e2));
+            }
             int64_t locals_buf[256] = {};
             int n = chunk.max_locals();
             return Value::Int(e2(n > 0 ? locals_buf : nullptr));
@@ -216,6 +240,10 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         CompiledEntry e1 = entry.tier1_entry;
         if (e1) {
             stats_.tier1_invocations.fetch_add(1, std::memory_order_relaxed);
+            static thread_local uint32_t t1_hit_counter = 0;
+            if ((++t1_hit_counter & 0x3FF) == 0) {
+                capacitor_->record_hit(reinterpret_cast<void*>(e1));
+            }
             int64_t locals_buf[256] = {};
             int n = chunk.max_locals();
             return Value::Int(e1(n > 0 ? locals_buf : nullptr));

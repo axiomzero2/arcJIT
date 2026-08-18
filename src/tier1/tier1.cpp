@@ -585,9 +585,29 @@ Tier1Compiler::compile(const Tier1Function& fn) {
                 break;
             }
 
-            case Tier1Op::Jump:
+            case Tier1Op::Jump: {
+                // SAFETY LIMITATION: no safepoint poll emitted at backedges.
+                //
+                // Real JITs emit a poll instruction at every loop backedge
+                // (e.g., `mov rax, [safepoint_flag]; test rax, rax; jnz
+                // handler`) so a GC thread can stop the mutator. Without
+                // this, a tight Tier-1 loop (e.g., `while (true) {}`)
+                // would never check for safepoints, violating Rule 9 and
+                // hanging any GC that's waiting for the mutator.
+                //
+                // Implementing this requires:
+                //   1. Identifying backedges (Jump targets whose label has
+                //      already been bound — backward in the code).
+                //   2. A thread-local safepoint flag address (passed in
+                //      the Tier1Context or via a dedicated register).
+                //   3. Emitting the poll before the jmp.
+                //
+                // Deferred — arcJIT's GC is not yet concurrent, so this
+                // is a forward-compat issue, not a current bug. Documented
+                // here so it's not forgotten.
                 a.jmp(labels[inst.payload]);
                 break;
+            }
 
             case Tier1Op::BranchIfFalse: {
                 load_to(a, pm, inst.src1, x86::rax);
