@@ -2,6 +2,7 @@
 #include "tier1/tier1.h"
 
 #include <algorithm>
+#include <cmath>
 #include <expected>
 #include <print>
 #include <unordered_map>
@@ -283,28 +284,31 @@ Tier1Compiler::compile(const Tier1Function& fn) {
                 break;
             }
             case Tier1Op::Div: {
-                // Integer division → we emit floating-point div to match Arc
-                // semantics. Convert both to double, divsd, then store as int
-                // (lossy for non-integer results, but matches our test setup).
+                // Arc's Div promotes to float: int(a) / int(b) → double.
+                // We compute the float result and store it as an int64
+                // bit-cast (matching how the interpreter stores floats).
                 load_to(a, pm, inst.src1, x86::rax);
                 load_to(a, pm, inst.src2, x86::rcx);
-                a.cvtsi2sd(x86::xmm0, x86::rax);
-                a.cvtsi2sd(x86::xmm1, x86::rcx);
-                a.divsd(x86::xmm0, x86::xmm1);
-                a.cvttsd2si(x86::rax, x86::xmm0);
+                a.cvtsi2sd(x86::xmm0, x86::rax);  // a as double
+                a.cvtsi2sd(x86::xmm1, x86::rcx);  // b as double
+                a.divsd(x86::xmm0, x86::xmm1);    // xmm0 = a/b
+                a.movq(x86::rax, x86::xmm0);      // store double bits as int64
                 store_from(a, pm, inst.dst, x86::rax);
                 break;
             }
             case Tier1Op::Pow: {
-                // Fall back to libc pow().
+                // Arc's Pow promotes to float: pow(int(a), int(b)) → double.
+                // We compute pow via a runtime call to libc's pow().
+                using PowFn = double (*)(double, double);
+                PowFn pow_fn = &std::pow;
                 load_to(a, pm, inst.src1, x86::rax);
                 load_to(a, pm, inst.src2, x86::rcx);
-                a.cvtsi2sd(x86::xmm0, x86::rax);
-                a.cvtsi2sd(x86::xmm1, x86::rcx);
-                // call pow
-                // (For the scaffold we leave this as a noop — Tier-1 doesn't
-                // support pow yet. Tier-2 will lower it properly.)
-                a.cvttsd2si(x86::rax, x86::xmm0);
+                a.cvtsi2sd(x86::xmm0, x86::rax);  // base as double
+                a.cvtsi2sd(x86::xmm1, x86::rcx);  // exponent as double
+                a.sub(x86::rsp, 8);
+                a.call(imm(reinterpret_cast<uint64_t>(pow_fn)));
+                a.add(x86::rsp, 8);
+                a.movq(x86::rax, x86::xmm0);
                 store_from(a, pm, inst.dst, x86::rax);
                 break;
             }

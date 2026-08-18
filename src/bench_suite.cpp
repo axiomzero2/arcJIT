@@ -254,10 +254,11 @@ static Chunk b_3_1() {
     c.add_const(mk_num(0));   // 1: initial i
     c.add_const(mk_num(100)); // 2: limit
     c.add_const(mk_num(1));   // 3: increment
-    c.emit_op(OpCode::LoadConst); c.emit_const_idx(0); c.emit_op(OpCode::StoreLocal); c.emit_byte(0);
-    c.emit_op(OpCode::LoadConst); c.emit_const_idx(1); c.emit_op(OpCode::StoreLocal); c.emit_byte(1);
-    c.emit_op(OpCode::LoadConst); c.emit_const_idx(2); c.emit_op(OpCode::StoreLocal); c.emit_byte(2);
-    // loop_start at offset 15:
+    c.emit_op(OpCode::LoadConst); c.emit_const_idx(0); c.emit_op(OpCode::StoreLocal); c.emit_byte(0); c.emit_op(OpCode::Pop);
+    c.emit_op(OpCode::LoadConst); c.emit_const_idx(1); c.emit_op(OpCode::StoreLocal); c.emit_byte(1); c.emit_op(OpCode::Pop);
+    c.emit_op(OpCode::LoadConst); c.emit_const_idx(2); c.emit_op(OpCode::StoreLocal); c.emit_byte(2); c.emit_op(OpCode::Pop);
+    // loop_start:
+    size_t loop_start = c.code_size();
     c.emit_op(OpCode::LoadLocal); c.emit_byte(1);
     c.emit_op(OpCode::LoadLocal); c.emit_byte(2);
     c.emit_op(OpCode::Lt); // i < limit
@@ -266,13 +267,13 @@ static Chunk b_3_1() {
     c.emit_op(OpCode::LoadLocal); c.emit_byte(0);
     c.emit_op(OpCode::LoadLocal); c.emit_byte(1);
     c.emit_op(OpCode::Add);
-    c.emit_op(OpCode::StoreLocal); c.emit_byte(0);
+    c.emit_op(OpCode::StoreLocal); c.emit_byte(0); c.emit_op(OpCode::Pop);
     c.emit_op(OpCode::LoadLocal); c.emit_byte(1);
     c.emit_op(OpCode::LoadConst); c.emit_const_idx(3);
     c.emit_op(OpCode::Add);
-    c.emit_op(OpCode::StoreLocal); c.emit_byte(1);
+    c.emit_op(OpCode::StoreLocal); c.emit_byte(1); c.emit_op(OpCode::Pop);
     size_t jmp = c.code_size();
-    c.emit_op(OpCode::Jump); c.emit_short(static_cast<int16_t>(15-(jmp+3)));
+    c.emit_op(OpCode::Jump); c.emit_short(static_cast<int16_t>(loop_start-(jmp+3)));
     size_t end = c.code_size();
     c.patch_short(jif+1, static_cast<int16_t>(end-(jif+3)));
     c.emit_op(OpCode::LoadLocal); c.emit_byte(0);
@@ -284,9 +285,10 @@ static Chunk b_3_1() {
 static Chunk b_3_2() {
     Chunk c; c.set_max_locals(3);
     c.add_const(mk_num(0)); c.add_const(mk_num(0)); c.add_const(mk_num(1000)); c.add_const(mk_num(1));
-    c.emit_op(OpCode::LoadConst); c.emit_const_idx(0); c.emit_op(OpCode::StoreLocal); c.emit_byte(0);
-    c.emit_op(OpCode::LoadConst); c.emit_const_idx(1); c.emit_op(OpCode::StoreLocal); c.emit_byte(1);
-    c.emit_op(OpCode::LoadConst); c.emit_const_idx(2); c.emit_op(OpCode::StoreLocal); c.emit_byte(2);
+    c.emit_op(OpCode::LoadConst); c.emit_const_idx(0); c.emit_op(OpCode::StoreLocal); c.emit_byte(0); c.emit_op(OpCode::Pop);
+    c.emit_op(OpCode::LoadConst); c.emit_const_idx(1); c.emit_op(OpCode::StoreLocal); c.emit_byte(1); c.emit_op(OpCode::Pop);
+    c.emit_op(OpCode::LoadConst); c.emit_const_idx(2); c.emit_op(OpCode::StoreLocal); c.emit_byte(2); c.emit_op(OpCode::Pop);
+    size_t loop_start = c.code_size();
     c.emit_op(OpCode::LoadLocal); c.emit_byte(1);
     c.emit_op(OpCode::LoadLocal); c.emit_byte(2);
     c.emit_op(OpCode::Lt);
@@ -295,13 +297,13 @@ static Chunk b_3_2() {
     c.emit_op(OpCode::LoadLocal); c.emit_byte(0);
     c.emit_op(OpCode::LoadLocal); c.emit_byte(1);
     c.emit_op(OpCode::Add);
-    c.emit_op(OpCode::StoreLocal); c.emit_byte(0);
+    c.emit_op(OpCode::StoreLocal); c.emit_byte(0); c.emit_op(OpCode::Pop);
     c.emit_op(OpCode::LoadLocal); c.emit_byte(1);
     c.emit_op(OpCode::LoadConst); c.emit_const_idx(3);
     c.emit_op(OpCode::Add);
-    c.emit_op(OpCode::StoreLocal); c.emit_byte(1);
+    c.emit_op(OpCode::StoreLocal); c.emit_byte(1); c.emit_op(OpCode::Pop);
     size_t jmp = c.code_size();
-    c.emit_op(OpCode::Jump); c.emit_short(static_cast<int16_t>(15-(jmp+3)));
+    c.emit_op(OpCode::Jump); c.emit_short(static_cast<int16_t>(loop_start-(jmp+3)));
     size_t end = c.code_size();
     c.patch_short(jif+1, static_cast<int16_t>(end-(jif+3)));
     c.emit_op(OpCode::LoadLocal); c.emit_byte(0);
@@ -419,9 +421,9 @@ static std::vector<Bench> make_all_benchmarks() {
     add("2.2 ctrl_branch_fold_false",  "ControlFlow", b_2_2(), 10);
     add("2.3 ctrl_nested_branches",    "ControlFlow", b_2_3(), 1);
 
-    // Category 3: Loops (skip — loop bytecode needs interpreter fixes)
-    // add("3.1 loop_sum_0_to_99",   "Loops", b_3_1(), 4950);
-    // add("3.2 loop_sum_0_to_999",  "Loops", b_3_2(), 499500);
+    // Category 3: Loops
+    add("3.1 loop_sum_0_to_99",   "Loops", b_3_1(), 4950);
+    add("3.2 loop_sum_0_to_999",  "Loops", b_3_2(), 499500);
 
     // Category 4: Allocation
     add("4.1 alloc_build_list", "Allocation", b_4_1(), 60);
@@ -478,8 +480,16 @@ static BenchResult run_benchmark(Runtime& rt, const Bench& b, int iterations) {
             int64_t locals_buf[256] = {};
             int n = b.chunk.max_locals();
             void* lb = n > 0 ? locals_buf : nullptr;
-            r.jolt_result = entry(lb);
-            r.jolt_ok = (r.jolt_result == r.expected);
+            int64_t raw = entry(lb);
+            r.jolt_result = raw;
+            // Check both int and float interpretations (Jolt stores float
+            // results as bit-cast int64).
+            r.jolt_ok = (raw == r.expected);
+            if (!r.jolt_ok) {
+                double fval;
+                std::memcpy(&fval, &raw, sizeof(double));
+                r.jolt_ok = (static_cast<int64_t>(fval) == r.expected);
+            }
             entry(lb); // warmup
             auto t0 = now_ns();
             for (int i = 0; i < iterations; ++i) entry(lb);
@@ -501,8 +511,14 @@ static BenchResult run_benchmark(Runtime& rt, const Bench& b, int iterations) {
             int64_t locals_buf[256] = {};
             int n = b.chunk.max_locals();
             void* lb = n > 0 ? locals_buf : nullptr;
-            r.surge_result = entry(lb);
-            r.surge_ok = (r.surge_result == r.expected);
+            int64_t raw = entry(lb);
+            r.surge_result = raw;
+            r.surge_ok = (raw == r.expected);
+            if (!r.surge_ok) {
+                double fval;
+                std::memcpy(&fval, &raw, sizeof(double));
+                r.surge_ok = (static_cast<int64_t>(fval) == r.expected);
+            }
             entry(lb); // warmup
             auto t0 = now_ns();
             for (int i = 0; i < iterations; ++i) entry(lb);
