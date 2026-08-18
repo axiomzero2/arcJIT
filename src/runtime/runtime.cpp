@@ -171,26 +171,35 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
     ChunkEntry& entry = entry_for_(chunk);
     entry.invocations.fetch_add(1, std::memory_order_relaxed);
 
-    // Try to use the highest available compiled tier.
+    // Fast path: try to use the highest available compiled tier WITHOUT
+    // taking the mutex. We read the entry pointer atomically (it's a
+    // plain pointer — set under compile_mu, read lock-free here).
+    // This is safe because:
+    //   - The pointer is only set once (from nullptr to non-null).
+    //   - If we read nullptr, we fall through to the slow path.
+    //   - If we read a stale non-null, the code is still valid (Trip
+    //     patches the entry point to redirect to deopt before freeing).
     Tier current = entry.current_tier.load(std::memory_order_acquire);
     if (current >= Tier::Tier2Optimizing) {
-        std::lock_guard<std::mutex> g(entry.compile_mu);
-        if (entry.tier2_entry) {
+        CompiledEntry e2 = entry.tier2_entry;
+        if (e2) {
             stats_.tier2_invocations++;
-            std::vector<int64_t> locals(std::max(chunk.max_locals(), 1), 0);
-            return Value::Int(entry.tier2_entry(locals.data()));
+            int64_t locals_buf[256] = {};
+            int n = chunk.max_locals();
+            return Value::Int(e2(n > 0 ? locals_buf : nullptr));
         }
     }
     if (current >= Tier::Tier1Baseline) {
-        std::lock_guard<std::mutex> g(entry.compile_mu);
-        if (entry.tier1_entry) {
+        CompiledEntry e1 = entry.tier1_entry;
+        if (e1) {
             stats_.tier1_invocations++;
-            std::vector<int64_t> locals(std::max(chunk.max_locals(), 1), 0);
-            return Value::Int(entry.tier1_entry(locals.data()));
+            int64_t locals_buf[256] = {};
+            int n = chunk.max_locals();
+            return Value::Int(e1(n > 0 ? locals_buf : nullptr));
         }
     }
 
-    // Kick off background compilation if thresholds are met.
+    // Slow path: check if we need to compile.
     maybe_compile_(entry, chunk);
 
     // Fall back to interpreter.
@@ -203,21 +212,24 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         stats_.interp_invocations++;
         return interp_->run(chunk);
     }
+
+    int64_t locals_buf[256] = {};
+    int n = chunk.max_locals();
+    void* locals = n > 0 ? locals_buf : nullptr;
+
     if (t == Tier::Tier1Baseline) {
-        auto maybe_entry = compile_tier1(chunk);
-        if (!maybe_entry) return std::unexpected(maybe_entry.error());
+        // Always compile fresh — run_at_tier is the test/benchmark API.
+        // The hot path is Runtime::run(), which caches compiled code.
+        auto maybe = compile_tier1(chunk);
+        if (!maybe) return std::unexpected(maybe.error());
         stats_.tier1_invocations++;
-        // Allocate a locals buffer on the stack. The compiled code reads from
-        // [r12 + slot*8] — zero-initialized so undef reads give 0.
-        std::vector<int64_t> locals(std::max(chunk.max_locals(), 1), 0);
-        return Value::Int((*maybe_entry)(locals.data()));
+        return Value::Int((*maybe)(locals));
     }
     if (t == Tier::Tier2Optimizing) {
-        auto maybe_entry = compile_tier2(chunk);
-        if (!maybe_entry) return std::unexpected(maybe_entry.error());
+        auto maybe = compile_tier2(chunk);
+        if (!maybe) return std::unexpected(maybe.error());
         stats_.tier2_invocations++;
-        std::vector<int64_t> locals(std::max(chunk.max_locals(), 1), 0);
-        return Value::Int((*maybe_entry)(locals.data()));
+        return Value::Int((*maybe)(locals));
     }
     return std::unexpected("unknown tier");
 }

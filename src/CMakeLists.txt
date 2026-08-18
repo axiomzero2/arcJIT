@@ -110,3 +110,10 @@ target_compile_features(arcjit_bench PUBLIC cxx_std_23)
 target_compile_options(arcjit_bench PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
 target_link_libraries(arcjit_bench PRIVATE arcjit_runtime)
 set_target_properties(arcjit_bench PROPERTIES OUTPUT_NAME arcjit-bench)
+
+# --- Overhead Profiler ------------------------------------------------------
+add_executable(arcjit_profiler overhead_profiler.cpp)
+target_compile_features(arcjit_profiler PUBLIC cxx_std_23)
+target_compile_options(arcjit_profiler PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+target_link_libraries(arcjit_profiler PRIVATE arcjit_runtime)
+set_target_properties(arcjit_profiler PROPERTIES OUTPUT_NAME arcjit-profiler)

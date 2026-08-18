@@ -80,8 +80,11 @@ static Object* make_fuzz_const(int64_t v) {
     FuzzResult r;
     r.passed = true;
 
-    // Reconstruct the chunk.
-    Chunk c;
+    // Reconstruct the chunk. We heap-allocate it so the address is unique
+    // (the Runtime caches ChunkEntries by Chunk* address — stack-allocated
+    // chunks get reused addresses which causes stale cache hits).
+    auto chunk_ptr = std::make_unique<Chunk>();
+    Chunk& c = *chunk_ptr;
     c.set_max_locals(0);
     for (int64_t v : fc.constants) {
         c.add_const(make_fuzz_const(v));

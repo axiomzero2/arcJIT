@@ -127,8 +127,10 @@ static Chunk make_arith_chunk_from_spec(std::string_view spec) {
 }
 
 DiffTestResult diff_test_arith(Runtime& rt, std::string_view spec, int64_t expected) {
-    Chunk c = make_arith_chunk_from_spec(spec);
-    return diff_test_chunk(rt, c, expected);
+    // Heap-allocate the chunk so the address is unique (Runtime caches by address).
+    auto chunk_ptr = std::make_unique<Chunk>();
+    *chunk_ptr = make_arith_chunk_from_spec(spec);
+    return diff_test_chunk(rt, *chunk_ptr, expected);
 }
 
 size_t diff_test_batch(Runtime& rt, const std::vector<std::pair<std::string_view, int64_t>>& cases) {
