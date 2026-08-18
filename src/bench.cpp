@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
     std::println("");
 
     Runtime rt;
+    rt.set_profiling_enabled(false);  // we're not driving a tier-up here
 
     // --- Spark (interpreter) ---
     {

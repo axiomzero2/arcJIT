@@ -149,27 +149,73 @@ static int run_bytecode(Runtime& rt, Tier tier, std::string_view spec) {
 }
 
 static int run_bench(Runtime& rt, Tier tier) {
-    // Benchmark: compute (10 + 20) * 3 = 90, 10000 times.
+    // Benchmark: compute (10 + 20) * 3 = 90, N times.
+    //
+    // IMPORTANT: we measure EXECUTION time, not compile time.
+    // For Tier-1 (Jolt) and Tier-2 (Surge), we compile ONCE, warm up, then
+    // run the compiled entry N times inside the timed loop. The previous
+    // implementation called rt.run_at_tier() inside the loop, which
+    // recompiled every iteration — making the benchmark useless for
+    // answering "is the JIT faster?".
     Chunk c = parse_bytecode_spec("(10+20)*3");
     constexpr int N = 10000;
 
-    auto t0 = std::chrono::high_resolution_clock::now();
     int64_t result = 0;
-    for (int i = 0; i < N; ++i) {
-        auto r = rt.run_at_tier(c, tier);
-        if (!r) {
-            std::println(stderr, "error: {}", r.error());
-            return 1;
+
+    if (tier == Tier::Interpreter) {
+        // Spark: interpreter has no compiled form; just run the chunk N times.
+        // Disable profile feedback collection — we're not driving a tier-up
+        // here, so the per-opcode Meter write is pure overhead.
+        rt.set_profiling_enabled(false);
+        rt.run_at_tier(c, tier);  // warmup
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < N; ++i) {
+            auto r = rt.run_at_tier(c, tier);
+            if (!r) {
+                std::println(stderr, "error: {}", r.error());
+                return 1;
+            }
+            result = r->as_int();
         }
-        result = r->as_int();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+        std::println("Benchmark ({}, {} iters, EXECUTION only):", tier_name(tier), N);
+        std::println("  result: {}", result);
+        std::println("  per op: {} ns", ns / N);
+        return 0;
+    }
+
+    // Jolt / Surge: compile once, then execute N times.
+    auto t0c = std::chrono::high_resolution_clock::now();
+    std::expected<int64_t (*)(void*), std::string> maybe_entry =
+        tier == Tier::Tier2Optimizing ? rt.compile_tier2(c) : rt.compile_tier1(c);
+    auto t1c = std::chrono::high_resolution_clock::now();
+    if (!maybe_entry) {
+        std::println(stderr, "error: {}", maybe_entry.error());
+        return 1;
+    }
+    auto entry = *maybe_entry;
+    auto compile_us = std::chrono::duration_cast<std::chrono::microseconds>(t1c - t0c).count();
+
+    // Prepare locals buffer (chunk has max_locals=0 here, but the entry
+    // still needs a valid pointer — pass a dummy).
+    int64_t locals_buf[1] = {0};
+    void* lb = locals_buf;
+
+    // Warmup (pulls code into i-cache, primes any thread-local state).
+    entry(lb);
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < N; ++i) {
+        result = entry(lb);
     }
     auto t1 = std::chrono::high_resolution_clock::now();
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
 
-    std::println("Benchmark ({} x {}):", tier_name(tier), N);
-    std::println("  result: {}", result);
-    std::println("  total:  {} us", us);
-    std::println("  per op: {} ns", us * 1000 / N);
+    std::println("Benchmark ({}, {} iters, EXECUTION only):", tier_name(tier), N);
+    std::println("  result:     {}", result);
+    std::println("  compile:    {} us  (one-time, not in per-op)", compile_us);
+    std::println("  per op:     {} ns  (pure execution, post-warmup)", ns / N);
     return 0;
 }
 

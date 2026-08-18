@@ -166,6 +166,14 @@ public:
     // Invalidate all compiled code for a chunk (via Trip/Watchdog).
     void invalidate_chunk(const Chunk& chunk);
 
+    // Control whether the interpreter collects type/shape profile feedback
+    // on every opcode. Default: ON (needed for the tier ladder to make
+    // speculation decisions). Benchmarks that exercise the interpreter in
+    // a tight loop should call set_profiling_enabled(false) to skip the
+    // per-opcode Meter/Profile write — this is the dominant cost in Spark
+    // when no tier-up is intended.
+    void set_profiling_enabled(bool enabled);
+
 private:
     std::unique_ptr<enki::TaskScheduler> scheduler_;
     SafepointManager                       safepoint_mgr_;

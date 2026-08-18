@@ -57,8 +57,13 @@ set(ENKITS_LIB_TYPE STATIC CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(asmjit enkits)
 
 # --- Compiler flags ----------------------------------------------------------
+# NOTE: we don't use -Wshadow here. asmjit's headers (which we include
+# transitively via our PUBLIC asmjit::asmjit link) don't compile clean
+# with -Wshadow, and -Wshadow propagates to consumers via INTERFACE
+# compile options on asmjit's target. If we want -Wshadow on our code
+# only, we'd need to wrap asmjit includes with a system-include pragma.
 set(ARCJIT_WARNING_FLAGS
-    -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor
+    -Wall -Wextra -Wpedantic
     -Wno-gnu-zero-variadic-macro-arguments
 )
 
@@ -66,8 +71,27 @@ if(ARCJIT_WARNINGS_AS_ERRORS)
     list(APPEND ARCJIT_WARNING_FLAGS -Werror)
 endif()
 
-# JIT proper: no exceptions, no RTTI
+# JIT proper: no exceptions, no RTTI. Applied to ALL arcjit libs (including
+# the runtime, which is on the hot path — previously the runtime was built
+# with exceptions+RTTI enabled, paying for unused unwinding tables and
+# typeinfo on every Value copy / std::expected construction).
 set(ARCJIT_JIT_FLAGS -fno-exceptions -fno-rtti)
+
+# Architecture and optimization flags.
+# -march=native lets the compiler use AVX2/AVX-512 + BMI for the interpreter
+# dispatch loop, the linear-scan allocator, and the SoN graph walks.
+# -mtune=native picks the best instruction scheduler for this CPU.
+set(ARCJIT_ARCH_FLAGS -march=native -mtune=native)
+
+# LTO: link-time optimization across all arcjit libraries + executables.
+# Interprocedural inlining lets the compiler fold the Runtime::run() fast
+# path, the interpreter dispatch loop, and the asmjit emission calls.
+# Applied as both a compile and link option (LTO requires both).
+if(ARCJIT_ENABLE_LTO)
+    set(ARCJIT_LTO_FLAGS -flto=auto)
+else()
+    set(ARCJIT_LTO_FLAGS "")
+endif()
 
 # --- Helper: arcjit_jit_library ----------------------------------------------
 function(arcjit_jit_library target)
@@ -76,15 +100,25 @@ function(arcjit_jit_library target)
     target_compile_options(${target} PRIVATE
         ${ARCJIT_WARNING_FLAGS}
         ${ARCJIT_JIT_FLAGS}
+        ${ARCJIT_ARCH_FLAGS}
+        ${ARCJIT_LTO_FLAGS}
     )
+    target_link_options(${target} PRIVATE ${ARCJIT_LTO_FLAGS})
     target_link_libraries(${target} PUBLIC asmjit::asmjit enkits::enkits)
 endfunction()
 
 # --- Helper: arcjit_runtime_library ------------------------------------------
+# Same as arcjit_jit_library — the runtime IS part of the JIT hot path.
 function(arcjit_runtime_library target)
     add_library(${target} ${ARGN})
     target_compile_features(${target} PUBLIC cxx_std_23)
-    target_compile_options(${target} PRIVATE ${ARCJIT_WARNING_FLAGS})
+    target_compile_options(${target} PRIVATE
+        ${ARCJIT_WARNING_FLAGS}
+        ${ARCJIT_JIT_FLAGS}
+        ${ARCJIT_ARCH_FLAGS}
+        ${ARCJIT_LTO_FLAGS}
+    )
+    target_link_options(${target} PRIVATE ${ARCJIT_LTO_FLAGS})
     target_link_libraries(${target} PUBLIC asmjit::asmjit enkits::enkits)
 endfunction()
 

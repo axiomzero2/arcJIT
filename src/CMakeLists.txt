@@ -1,13 +1,46 @@
 # arcJIT — src/CMakeLists.txt
+#
+# All libraries apply: -fno-exceptions -fno-rtti -march=native -flto (the
+# JIT-flags + arch + LTO helpers from the top-level CMakeLists.txt). The
+# runtime library used to be built with exceptions+RTTI enabled, which
+# silently paid for unwinding tables and typeinfo on every Value copy and
+# std::expected construction on the hot path — fixed.
+
+# Common compile-options for arcjit targets (warnings + JIT flags + arch + LTO).
+set(ARCJIT_LIB_FLAGS
+    ${ARCJIT_WARNING_FLAGS}
+    ${ARCJIT_JIT_FLAGS}
+    ${ARCJIT_ARCH_FLAGS}
+    ${ARCJIT_LTO_FLAGS}
+)
+
+# Helper to apply standard arcjit lib settings.
+function(arcjit_lib_settings target)
+    target_include_directories(${target} PUBLIC .)
+    target_compile_features(${target} PUBLIC cxx_std_23)
+    target_compile_options(${target} PRIVATE ${ARCJIT_LIB_FLAGS})
+    target_link_options(${target} PRIVATE ${ARCJIT_LTO_FLAGS})
+endfunction()
+
+# Helper for executables (benchmarks, CLI, profilers).
+function(arcjit_exe_settings target)
+    target_compile_features(${target} PUBLIC cxx_std_23)
+    target_compile_options(${target} PRIVATE
+        ${ARCJIT_WARNING_FLAGS}
+        ${ARCJIT_JIT_FLAGS}
+        ${ARCJIT_ARCH_FLAGS}
+        ${ARCJIT_LTO_FLAGS}
+        -Wno-error  # tools may use features that trip pedantic
+    )
+    target_link_options(${target} PRIVATE ${ARCJIT_LTO_FLAGS})
+endfunction()
 
 # --- Bytecode library (mirrors Arc's headers) -------------------------------
 add_library(arcjit_bytecode STATIC
     bytecode/chunk.cpp
     bytecode/value.cpp
 )
-target_include_directories(arcjit_bytecode PUBLIC .)
-target_compile_features(arcjit_bytecode PUBLIC cxx_std_23)
-target_compile_options(arcjit_bytecode PRIVATE -Wall -Wextra -Wpedantic)
+arcjit_lib_settings(arcjit_bytecode)
 
 # --- Machinery (Watchdog, Meter, Probe, Regulator, Fuse, Trip, Capacitor, Relay, GroundFault, Governor)
 add_library(arcjit_machinery STATIC
@@ -22,9 +55,7 @@ add_library(arcjit_machinery STATIC
     machinery/ground_fault.cpp
     machinery/governor.cpp
 )
-target_include_directories(arcjit_machinery PUBLIC .)
-target_compile_features(arcjit_machinery PUBLIC cxx_std_23)
-target_compile_options(arcjit_machinery PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
+arcjit_lib_settings(arcjit_machinery)
 
 # --- Core IR library (Node, Graph, Arena, IR dumper, Verifier, Replay, Dominance, Bitmask)
 add_library(arcjit_core STATIC
@@ -36,9 +67,7 @@ add_library(arcjit_core STATIC
     core/dominance.cpp
     core/bitmask.cpp
 )
-target_include_directories(arcjit_core PUBLIC .)
-target_compile_features(arcjit_core PUBLIC cxx_std_23)
-target_compile_options(arcjit_core PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
+arcjit_lib_settings(arcjit_core)
 target_link_libraries(arcjit_core PUBLIC arcjit_bytecode)
 
 # --- Pass manager (with instrumentation) ------------------------------------
@@ -46,18 +75,14 @@ add_library(arcjit_passman STATIC
     passman/pass.cpp
     passman/instrument.cpp
 )
-target_include_directories(arcjit_passman PUBLIC .)
-target_compile_features(arcjit_passman PUBLIC cxx_std_23)
-target_compile_options(arcjit_passman PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
+arcjit_lib_settings(arcjit_passman)
 target_link_libraries(arcjit_passman PUBLIC arcjit_core)
 
 # --- Tier 1 baseline SSA JIT ------------------------------------------------
 add_library(arcjit_tier1 STATIC
     tier1/tier1.cpp
 )
-target_include_directories(arcjit_tier1 PUBLIC .)
-target_compile_features(arcjit_tier1 PUBLIC cxx_std_23)
-target_compile_options(arcjit_tier1 PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
+arcjit_lib_settings(arcjit_tier1)
 target_link_libraries(arcjit_tier1 PUBLIC
     arcjit_core
     arcjit_bytecode
@@ -69,9 +94,7 @@ target_link_libraries(arcjit_tier1 PUBLIC
 add_library(arcjit_tier2 STATIC
     tier2/tier2.cpp
 )
-target_include_directories(arcjit_tier2 PUBLIC .)
-target_compile_features(arcjit_tier2 PUBLIC cxx_std_23)
-target_compile_options(arcjit_tier2 PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror)
+arcjit_lib_settings(arcjit_tier2)
 target_link_libraries(arcjit_tier2 PUBLIC
     arcjit_core
     arcjit_passman
@@ -85,9 +108,7 @@ add_library(arcjit_runtime STATIC
     runtime/deopt_validator.cpp
     runtime/fuzzer.cpp
 )
-target_include_directories(arcjit_runtime PUBLIC .)
-target_compile_features(arcjit_runtime PUBLIC cxx_std_23)
-target_compile_options(arcjit_runtime PRIVATE -Wall -Wextra -Wpedantic -Werror)
+arcjit_lib_settings(arcjit_runtime)
 target_link_libraries(arcjit_runtime PUBLIC
     arcjit_core
     arcjit_bytecode
@@ -100,56 +121,38 @@ target_link_libraries(arcjit_runtime PUBLIC
 
 # --- CLI --------------------------------------------------------------------
 add_executable(arcjit_cli main.cpp)
-target_compile_features(arcjit_cli PUBLIC cxx_std_23)
-target_compile_options(arcjit_cli PRIVATE -Wall -Wextra -Wpedantic -Werror)
+arcjit_exe_settings(arcjit_cli)
 target_link_libraries(arcjit_cli PRIVATE arcjit_runtime)
 set_target_properties(arcjit_cli PROPERTIES OUTPUT_NAME arcjit-cli)
 
-# --- Benchmark --------------------------------------------------------------
+# --- Benchmark (compile-once-then-execute, used by arcjit-bench) ------------
 add_executable(arcjit_bench bench.cpp)
-target_compile_features(arcjit_bench PUBLIC cxx_std_23)
-target_compile_options(arcjit_bench PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+arcjit_exe_settings(arcjit_bench)
 target_link_libraries(arcjit_bench PRIVATE arcjit_runtime)
 set_target_properties(arcjit_bench PROPERTIES OUTPUT_NAME arcjit-bench)
 
 # --- Overhead Profiler ------------------------------------------------------
 add_executable(arcjit_profiler overhead_profiler.cpp)
-target_compile_features(arcjit_profiler PUBLIC cxx_std_23)
-target_compile_options(arcjit_profiler PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+arcjit_exe_settings(arcjit_profiler)
 target_link_libraries(arcjit_profiler PRIVATE arcjit_runtime)
 set_target_properties(arcjit_profiler PROPERTIES OUTPUT_NAME arcjit-profiler)
 
 # --- Overhead Breakdown Profiler -------------------------------------------
 add_executable(arcjit_breakdown overhead_breakdown_profiler.cpp)
-target_compile_features(arcjit_breakdown PUBLIC cxx_std_23)
-target_compile_options(arcjit_breakdown PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+arcjit_exe_settings(arcjit_breakdown)
 target_link_libraries(arcjit_breakdown PRIVATE arcjit_runtime)
 set_target_properties(arcjit_breakdown PROPERTIES OUTPUT_NAME arcjit-breakdown)
 
 # --- Gigavolt Diagnostic ----------------------------------------------------
 add_executable(arcjit_diag gigavolt_diag.cpp)
-target_compile_features(arcjit_diag PUBLIC cxx_std_23)
-target_compile_options(arcjit_diag PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+arcjit_exe_settings(arcjit_diag)
 target_link_libraries(arcjit_diag PRIVATE arcjit_runtime)
 set_target_properties(arcjit_diag PROPERTIES OUTPUT_NAME arcjit-diag)
 
 # --- Benchmark Suite --------------------------------------------------------
 add_executable(arcjit_suite bench_suite.cpp)
-target_compile_features(arcjit_suite PUBLIC cxx_std_23)
-target_compile_options(arcjit_suite PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+arcjit_exe_settings(arcjit_suite)
 target_link_libraries(arcjit_suite PRIVATE arcjit_runtime)
 set_target_properties(arcjit_suite PROPERTIES OUTPUT_NAME arcjit-suite)
 
-# --- Debug 1.3 -------------------------------------------------------------
-add_executable(arcjit_debug_1_3 debug_1_3.cpp)
-target_compile_features(arcjit_debug_1_3 PUBLIC cxx_std_23)
-target_compile_options(arcjit_debug_1_3 PRIVATE -Wall -Wextra -Wno-error)
-target_link_libraries(arcjit_debug_1_3 PRIVATE arcjit_runtime)
-set_target_properties(arcjit_debug_1_3 PROPERTIES OUTPUT_NAME arcjit-debug-1-3)
-
-# --- Debug 17.1 -------------------------------------------------------------
-add_executable(arcjit_debug_17_1 debug_17_1.cpp)
-target_compile_features(arcjit_debug_17_1 PUBLIC cxx_std_23)
-target_compile_options(arcjit_debug_17_1 PRIVATE -Wall -Wextra -Wno-error)
-target_link_libraries(arcjit_debug_17_1 PRIVATE arcjit_runtime)
-set_target_properties(arcjit_debug_17_1 PROPERTIES OUTPUT_NAME arcjit-debug-17-1)
+# --- Repro GVN segfault ----------------------------------------------------

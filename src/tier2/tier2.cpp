@@ -2,6 +2,8 @@
 #include "tier2/tier2.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <expected>
 #include <format>
 #include <print>
@@ -1111,8 +1113,26 @@ compile_at_tier2(const Tier1Function& fn) {
 
     if (has_branches) {
         // Fall back to Tier-1 compilation for branchy functions.
+        //
+        // This is a KNOWN LIMITATION, not a soundness issue. The SoN→Tier-1
+        // back-lowering uses a block-based walker that doesn't correctly
+        // reconstruct control flow when there are forward branches (Jump /
+        // BranchIfTrue / BranchIfFalse). Linear functions are fully
+        // optimized at Tier-2.
+        //
+        // Until GCM with proper Region/Phi handling is implemented, we
+        // transparently return Tier-1 code. The caller gets correct code,
+        // just without SoN-level optimizations (GVN, ConstFold, etc.).
+        //
+        // To make this observable for debugging, set ARCJIT_LOG_TIER2_FALLBACK=1
+        // in the environment.
         static thread_local std::unique_ptr<Tier1Compiler> tls_compiler;
         if (!tls_compiler) tls_compiler = std::make_unique<Tier1Compiler>();
+        if (std::getenv("ARCJIT_LOG_TIER2_FALLBACK") != nullptr) {
+            std::fprintf(stderr,
+                "[arcjit] Surge fell back to Jolt for '%s' (branchy function, %zu insts)\n",
+                fn.name.c_str(), fn.insts.size());
+        }
         return tls_compiler->compile(fn);
     }
 

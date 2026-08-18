@@ -90,6 +90,7 @@ static Chunk make_arith_chunk() {
 int main() {
     constexpr int N = 1000000;
     Runtime rt;
+    rt.set_profiling_enabled(false);  // we measure raw interpreter cost
 
     std::println("=== arcJIT Overhead Profiler ===");
     std::println("Iterations: {}", N);

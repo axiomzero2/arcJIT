@@ -75,6 +75,7 @@ static Chunk make_arith_chunk() {
 int main() {
     constexpr int N = 1'000'000;
     Runtime rt;
+    rt.set_profiling_enabled(false);
     Chunk c = make_arith_chunk();
 
     std::println("=== arcJIT Overhead Breakdown ===");

@@ -123,6 +123,13 @@ Runtime::Runtime() {
 
 Runtime::~Runtime() = default;
 
+void Runtime::set_profiling_enabled(bool enabled) {
+    // Detach or re-attach the Meter from the interpreter. The Meter itself
+    // stays alive (it owns historical profile data we may still want); we
+    // only flip the interpreter's pointer to it.
+    interp_->attach_meter(enabled ? meter_.get() : nullptr);
+}
+
 ChunkEntry& Runtime::entry_for_(const Chunk& chunk) {
     std::lock_guard<std::mutex> g(chunks_mu_);
     auto it = chunks_.find(&chunk);

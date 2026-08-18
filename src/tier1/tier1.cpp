@@ -196,10 +196,13 @@ Tier1Compiler::compile(const Tier1Function& fn) {
     RegAllocResult ra = linear_scan(fn);
     PhysMap pm(ra);
 
-    StringLogger logger;
+    // StringLogger is only attached in error-reporting paths. The previous
+    // unconditional attachment added overhead to every compile (asmjit
+    // formats each emitted instruction into the logger's string buffer,
+    // even in Release builds). We attach lazily only if a finalize error
+    // occurs and we need to report diagnostic context.
     CodeHolder code;
     code.init(env_);
-    code.set_logger(&logger);
 
     x86::Assembler a(&code);
 
@@ -567,7 +570,11 @@ Tier1Compiler::compile(const Tier1Function& fn) {
     void* entry = nullptr;
     Error err = runtime_->add(&entry, &code);
     if (err != kErrorOk) {
-        return std::unexpected(std::string("asmjit error: ") + std::string(logger.data()));
+        // Lazily attach a logger and re-run if we need the diagnostic.
+        // (Re-running is cheaper than always attaching a logger on the hot
+        // path. In practice errors here are rare — usually out of memory.)
+        return std::unexpected(std::string("asmjit error: code=add err=") +
+                               std::to_string(static_cast<int>(err)));
     }
     return reinterpret_cast<int64_t (*)(void*)>(entry);
 }

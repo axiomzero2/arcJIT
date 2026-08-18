@@ -539,6 +539,7 @@ int main(int argc, char** argv) {
     std::println("");
 
     Runtime rt;
+    rt.set_profiling_enabled(false);  // we measure pure execution, not profile collection
     int pass_count = 0, fail_count = 0;
     double total_spark_ns = 0, total_jolt_ns = 0, total_surge_ns = 0;
 
