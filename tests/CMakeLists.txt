@@ -44,6 +44,7 @@ add_executable(arcjit_tests
     test_fuzzer.cpp
     test_dominance.cpp
     test_machinery.cpp
+    test_machinery_wiring.cpp
 )
 target_include_directories(arcjit_tests PRIVATE .)
 target_compile_features(arcjit_tests PUBLIC cxx_std_23)

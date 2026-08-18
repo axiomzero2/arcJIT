@@ -104,6 +104,18 @@ Runtime::Runtime() {
     scheduler_ = std::make_unique<enki::TaskScheduler>();
     scheduler_->Initialize();
 
+    // Initialize machinery.
+    watchdog_  = std::make_unique<Watchdog>();
+    meter_     = std::make_unique<Meter>();
+    trip_      = std::make_unique<Trip>();
+    capacitor_ = std::make_unique<Capacitor>();
+    relay_     = std::make_unique<Relay>();
+    regulator_ = std::make_unique<Regulator>();
+    fuse_      = std::make_unique<Fuse>();
+
+    // Detect CPU features (Probe is static, auto-detected on first access).
+    (void)cpu_features();
+
     interp_ = std::make_unique<Interpreter>();
     interp_->attach_safepoint(&safepoint_mgr_);
 }
@@ -225,6 +237,20 @@ Runtime::compile_tier1(const Chunk& chunk) {
         entry.tier1_fn   = std::make_unique<Tier1Function>(std::move(*maybe_fn));
         entry.tier1_entry = *maybe_entry;
         entry.current_tier.store(Tier::Tier1Baseline, std::memory_order_release);
+
+        // Register with Trip (code invalidation) and Capacitor (code cache).
+        entry.tier1_code_id = trip_->register_code(
+            reinterpret_cast<void*>(*maybe_entry), 0, "jolt");
+        capacitor_->register_allocation(
+            reinterpret_cast<void*>(*maybe_entry), 0, true);
+
+        // Register a Watchdog assumption for this chunk (TypeStable).
+        if (entry.assumption_id == 0) {
+            entry.assumption_id = watchdog_->register_assumption(
+                AssumptionKind::TypeStable,
+                reinterpret_cast<uint64_t>(&chunk),
+                nullptr, "chunk_type_stable");
+        }
     }
     stats_.tier1_compiles++;
     return entry.tier1_entry;
@@ -244,6 +270,17 @@ Runtime::compile_tier2(const Chunk& chunk) {
         entry.tier2_fn   = std::make_unique<Tier1Function>(std::move(*maybe_fn));
         entry.tier2_entry = *maybe_entry;
         entry.current_tier.store(Tier::Tier2Optimizing, std::memory_order_release);
+
+        // Register with Trip and Capacitor.
+        entry.tier2_code_id = trip_->register_code(
+            reinterpret_cast<void*>(*maybe_entry), 0, "surge");
+        capacitor_->register_allocation(
+            reinterpret_cast<void*>(*maybe_entry), 0, true);
+
+        // Add dependency: Trip code depends on Watchdog assumption.
+        if (entry.assumption_id != 0) {
+            trip_->add_dependency(entry.tier2_code_id, entry.assumption_id);
+        }
     }
     stats_.tier2_compiles++;
     return entry.tier2_entry;
@@ -320,6 +357,61 @@ Runtime::osr_to_tier2(const Chunk& chunk, void* locals_base) {
     out += "\n";
     out += dump_graph_dot(job.graph);
     return out;
+}
+
+// --- Machinery integration --------------------------------------------------
+
+[[nodiscard]] std::string Runtime::dump_machinery() const {
+    std::string out;
+    out += "=== arcJIT Machinery State ===\n\n";
+    out += watchdog_->dump();
+    out += "\n";
+    out += meter_->dump();
+    out += "\n";
+    out += cpu_features().dump();
+    out += "\n";
+    out += regulator_->dump();
+    out += "\n";
+    out += fuse_->dump();
+    out += "\n";
+    out += trip_->dump();
+    out += "\n";
+    out += capacitor_->dump();
+    out += "\n";
+    out += relay_->dump();
+    return out;
+}
+
+void Runtime::invalidate_chunk(const Chunk& chunk) {
+    std::lock_guard<std::mutex> g(chunks_mu_);
+    auto it = chunks_.find(&chunk);
+    if (it == chunks_.end()) return;
+    ChunkEntry& entry = *it->second;
+
+    // Invalidate the Watchdog assumption (triggers Trip cascade).
+    if (entry.assumption_id != 0) {
+        watchdog_->invalidate(entry.assumption_id);
+    }
+
+    // Directly invalidate compiled code via Trip.
+    if (entry.tier1_code_id != 0) {
+        trip_->invalidate(entry.tier1_code_id);
+    }
+    if (entry.tier2_code_id != 0) {
+        trip_->invalidate(entry.tier2_code_id);
+    }
+
+    // Reset the tier to interpreter.
+    entry.current_tier.store(Tier::Interpreter, std::memory_order_release);
+
+    // Clear compiled entries.
+    {
+        std::lock_guard<std::mutex> cg(entry.compile_mu);
+        entry.tier1_entry = nullptr;
+        entry.tier2_entry = nullptr;
+        entry.tier1_fn.reset();
+        entry.tier2_fn.reset();
+    }
 }
 
 }  // namespace arcjit

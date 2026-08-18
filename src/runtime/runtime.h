@@ -38,6 +38,15 @@
 
 #include <TaskScheduler.h>
 
+#include "machinery/watchdog.h"
+#include "machinery/meter.h"
+#include "machinery/probe.h"
+#include "machinery/regulator.h"
+#include "machinery/fuse.h"
+#include "machinery/trip.h"
+#include "machinery/capacitor.h"
+#include "machinery/relay.h"
+
 namespace arcjit {
 
 enum class Tier : uint8_t {
@@ -93,6 +102,11 @@ struct ChunkEntry {
     // True if a compilation is in progress (prevents duplicate jobs).
     std::atomic<bool>     tier1_compiling {false};
     std::atomic<bool>     tier2_compiling {false};
+
+    // Machinery links.
+    uint32_t              tier1_code_id  = 0;  // Trip code ID for Jolt code
+    uint32_t              tier2_code_id  = 0;  // Trip code ID for Surge code
+    uint32_t              assumption_id  = 0;  // Watchdog assumption for this chunk
 };
 
 class Runtime {
@@ -137,10 +151,34 @@ public:
     // Access the underlying scheduler.
     [[nodiscard]] enki::TaskScheduler& scheduler() noexcept { return *scheduler_; }
 
+    // --- Machinery accessors ---
+    [[nodiscard]] Watchdog&   watchdog()   noexcept { return *watchdog_; }
+    [[nodiscard]] Meter&      meter()      noexcept { return *meter_; }
+    [[nodiscard]] Trip&       trip()       noexcept { return *trip_; }
+    [[nodiscard]] Capacitor&  capacitor()  noexcept { return *capacitor_; }
+    [[nodiscard]] Relay&      relay()      noexcept { return *relay_; }
+    [[nodiscard]] Regulator&  regulator()  noexcept { return *regulator_; }
+    [[nodiscard]] Fuse&       fuse()       noexcept { return *fuse_; }
+
+    // Dump all machinery state (for CLI --machinery).
+    [[nodiscard]] std::string dump_machinery() const;
+
+    // Invalidate all compiled code for a chunk (via Trip/Watchdog).
+    void invalidate_chunk(const Chunk& chunk);
+
 private:
     std::unique_ptr<enki::TaskScheduler> scheduler_;
     SafepointManager                       safepoint_mgr_;
     CompilationStats                      stats_;
+
+    // Machinery instances (owned by the runtime).
+    std::unique_ptr<Watchdog>   watchdog_;
+    std::unique_ptr<Meter>      meter_;
+    std::unique_ptr<Trip>       trip_;
+    std::unique_ptr<Capacitor>  capacitor_;
+    std::unique_ptr<Relay>      relay_;
+    std::unique_ptr<Regulator>  regulator_;
+    std::unique_ptr<Fuse>       fuse_;
 
     // Per-mutator interpreter state. In a real runtime, each mutator thread
     // would have its own Interpreter; here we have one for simplicity.

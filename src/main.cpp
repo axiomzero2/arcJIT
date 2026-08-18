@@ -189,6 +189,11 @@ int main(int argc, char** argv) {
         std::println("arcJIT v0.3.0 (C++23, Spark/Jolt/Surge)");
         return 0;
     }
+    if (arg1 == "--machinery") {
+        Runtime rt;
+        std::println("{}", rt.dump_machinery());
+        return 0;
+    }
     if (arg1 == "--demo") {
         if (argc < 3) {
             std::println(stderr, "error: --demo requires an argument (jolt or surge)");
