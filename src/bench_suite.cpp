@@ -441,10 +441,7 @@ static std::vector<Bench> make_all_benchmarks() {
     add("15.1 guard_self_compare", "GuardStress", b_15_1(), 1);
 
     // Category 17: Compile Stress
-    // 17.1 disabled — 50-add chain with locals exposes a back-lowering bug
-    // where LocalForwarding + ConstFold folds to ConstInt(50) but the
-    // block-based lowering doesn't emit it correctly.
-    // add("17.1 compile_large_50add", "CompileStress", b_17_1(), 50);
+    add("17.1 compile_large_50add", "CompileStress", b_17_1(), 50);
 
     return benches;
 }

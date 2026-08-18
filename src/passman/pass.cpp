@@ -809,34 +809,25 @@ PassResult CallInliningPass::run(Graph& g) {
 PassResult LocalForwardingPass::run(Graph& g) {
     PassResult r;
 
-    // Build a map: (slot, effect_chain_node) → ConstInt value.
-    // We walk all StoreLocal nodes. For each, if the stored value is a
-    // ConstInt, we record it. Then we walk all LoadLocal nodes and check
-    // if their effect input chain leads to a StoreLocal with a known constant.
-
-    // Step 1: Find all StoreLocal nodes with constant values.
-    // Map: slot → (StoreLocal node ID, ConstInt node ID)
-    std::unordered_map<uint32_t, std::pair<NodeId, NodeId>> slot_to_store;
-    for (uint32_t i = 1; i < g.size(); ++i) {
-        NodeId id{static_cast<uint32_t>(i)};
-        const Node& n = g.at(id);
-        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-        if (n.kind != NodeKind::StoreLocal) continue;
-
-        // Get the data input (the value being stored).
-        auto data = g.inputs_of_kind(id, EdgeKind::Data);
-        if (data.empty()) continue;
-        const Node& val = g.at(data[0]);
-        if (val.kind != NodeKind::ConstInt) continue;
-
-        // Record: slot → (this StoreLocal, the ConstInt)
-        slot_to_store[n.payload] = {id, data[0]};
-    }
-
-    if (slot_to_store.empty()) return r;
-
-    // Step 2: For each LoadLocal, check if its effect input is a StoreLocal
-    // with a known constant for the same slot.
+    // Store-to-load forwarding via the effect chain.
+    //
+    // Each LoadLocal has an Effect input that points to the StoreLocal (or
+    // effect-creating node) it reads from. If that effect input is a
+    // StoreLocal for the SAME slot, we can forward the LoadLocal to the
+    // StoreLocal's data input — no intervening store exists, by definition
+    // of the effect edge.
+    //
+    // This is sound regardless of the stored value's type (ConstInt, Add,
+    // LoadLocal, anything). It also correctly handles the case where the
+    // stored value is later folded to a constant by ConstFold — the
+    // forwarded users will pick up the new value via the normal use chain.
+    //
+    // The previous implementation built a single `slot → ConstInt` map and
+    // forwarded ALL LoadLocals for that slot to the same ConstInt, which was
+    // wrong: it ignored the effect chain and could forward a LoadLocal to a
+    // StoreLocal that doesn't dominate it. (This broke 17.1, where the
+    // initial `local0 = 0` was forwarded to LoadLocals that should have read
+    // later stores of `1`.)
     for (uint32_t i = 1; i < g.size(); ++i) {
         NodeId id{static_cast<uint32_t>(i)};
         Node& n = g.at(id);
@@ -844,21 +835,22 @@ PassResult LocalForwardingPass::run(Graph& g) {
         if (n.kind != NodeKind::LoadLocal) continue;
 
         uint32_t slot = n.payload;
-        auto it = slot_to_store.find(slot);
-        if (it == slot_to_store.end()) continue;
 
-        NodeId store_node = it->second.first;
-        NodeId const_node = it->second.second;
+        // Find the LoadLocal's effect input.
+        auto effects = g.inputs_of_kind(id, EdgeKind::Effect);
+        if (effects.empty()) continue;
+        NodeId effect_src = effects[0];
+        const Node& effect_node = g.at(effect_src);
+        if (effect_node.kind != NodeKind::StoreLocal) continue;
+        if (effect_node.payload != slot) continue;
 
-        // Check if this LoadLocal's effect input is the StoreLocal (or leads
-        // to it via a short effect chain). For simplicity, we check if the
-        // StoreLocal's ID is less than this LoadLocal's ID (meaning it
-        // precedes in program order) and the slot matches.
-        // A full implementation would use dominance + memory SSA.
-        if (store_node.value >= id.value) continue;  // store must come before load
+        // Get the StoreLocal's data input (the value being stored).
+        auto store_data = g.inputs_of_kind(effect_src, EdgeKind::Data);
+        if (store_data.empty()) continue;
+        NodeId stored_value = store_data[0];
 
-        // Replace all uses of this LoadLocal with the ConstInt.
-        g.replace_all_uses_with(id, const_node);
+        // Forward: replace all uses of this LoadLocal with the stored value.
+        g.replace_all_uses_with(id, stored_value);
         g.mark_dead(id);
         r.changed = true;
         r.nodes_removed++;

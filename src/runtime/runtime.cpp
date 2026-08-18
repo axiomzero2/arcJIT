@@ -168,22 +168,38 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
 }
 
 [[nodiscard]] std::expected<Value, std::string> Runtime::run(const Chunk& chunk) {
-    ChunkEntry& entry = entry_for_(chunk);
+    // Hot path: thread-local single-slot cache keyed by Chunk*.
+    // The ChunkEntry* is stable for the chunk's lifetime (it lives behind a
+    // unique_ptr in the chunks_ map), so we can cache it per-thread without
+    // taking chunks_mu_ on every call.
+    thread_local const Chunk* tls_cached_chunk = nullptr;
+    thread_local ChunkEntry*  tls_cached_entry = nullptr;
+
+    ChunkEntry* entry_ptr;
+    if (tls_cached_chunk == &chunk) [[likely]] {
+        entry_ptr = tls_cached_entry;
+    } else {
+        entry_ptr = &entry_for_(chunk);
+        tls_cached_chunk = &chunk;
+        tls_cached_entry = entry_ptr;
+    }
+    ChunkEntry& entry = *entry_ptr;
+
+    // Relaxed — we only need an approximate count for the tier-up decision.
     entry.invocations.fetch_add(1, std::memory_order_relaxed);
 
     // Fast path: try to use the highest available compiled tier WITHOUT
     // taking the mutex. We read the entry pointer atomically (it's a
     // plain pointer — set under compile_mu, read lock-free here).
-    // This is safe because:
-    //   - The pointer is only set once (from nullptr to non-null).
-    //   - If we read nullptr, we fall through to the slow path.
-    //   - If we read a stale non-null, the code is still valid (Trip
-    //     patches the entry point to redirect to deopt before freeing).
-    Tier current = entry.current_tier.load(std::memory_order_acquire);
+    // Relaxed is safe: if we read a stale nullptr, we fall through to the
+    // next tier or slow path; the next call observes the updated value.
+    // If we read a stale non-null while an invalidate is in flight, the
+    // code is still valid until Trip patches the entry point (Rule 44).
+    Tier current = entry.current_tier.load(std::memory_order_relaxed);
     if (current >= Tier::Tier2Optimizing) {
         CompiledEntry e2 = entry.tier2_entry;
         if (e2) {
-            stats_.tier2_invocations++;
+            stats_.tier2_invocations.fetch_add(1, std::memory_order_relaxed);
             int64_t locals_buf[256] = {};
             int n = chunk.max_locals();
             return Value::Int(e2(n > 0 ? locals_buf : nullptr));
@@ -192,7 +208,7 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
     if (current >= Tier::Tier1Baseline) {
         CompiledEntry e1 = entry.tier1_entry;
         if (e1) {
-            stats_.tier1_invocations++;
+            stats_.tier1_invocations.fetch_add(1, std::memory_order_relaxed);
             int64_t locals_buf[256] = {};
             int n = chunk.max_locals();
             return Value::Int(e1(n > 0 ? locals_buf : nullptr));
@@ -203,7 +219,7 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
     maybe_compile_(entry, chunk);
 
     // Fall back to interpreter.
-    stats_.interp_invocations++;
+    stats_.interp_invocations.fetch_add(1, std::memory_order_relaxed);
     return interp_->run(chunk);
 }
 

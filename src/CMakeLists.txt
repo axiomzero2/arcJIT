@@ -119,6 +119,13 @@ target_compile_options(arcjit_profiler PRIVATE -Wall -Wextra -Wpedantic -Wno-err
 target_link_libraries(arcjit_profiler PRIVATE arcjit_runtime)
 set_target_properties(arcjit_profiler PROPERTIES OUTPUT_NAME arcjit-profiler)
 
+# --- Overhead Breakdown Profiler -------------------------------------------
+add_executable(arcjit_breakdown overhead_breakdown_profiler.cpp)
+target_compile_features(arcjit_breakdown PUBLIC cxx_std_23)
+target_compile_options(arcjit_breakdown PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+target_link_libraries(arcjit_breakdown PRIVATE arcjit_runtime)
+set_target_properties(arcjit_breakdown PROPERTIES OUTPUT_NAME arcjit-breakdown)
+
 # --- Gigavolt Diagnostic ----------------------------------------------------
 add_executable(arcjit_diag gigavolt_diag.cpp)
 target_compile_features(arcjit_diag PUBLIC cxx_std_23)
@@ -132,3 +139,17 @@ target_compile_features(arcjit_suite PUBLIC cxx_std_23)
 target_compile_options(arcjit_suite PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
 target_link_libraries(arcjit_suite PRIVATE arcjit_runtime)
 set_target_properties(arcjit_suite PROPERTIES OUTPUT_NAME arcjit-suite)
+
+# --- Debug 1.3 -------------------------------------------------------------
+add_executable(arcjit_debug_1_3 debug_1_3.cpp)
+target_compile_features(arcjit_debug_1_3 PUBLIC cxx_std_23)
+target_compile_options(arcjit_debug_1_3 PRIVATE -Wall -Wextra -Wno-error)
+target_link_libraries(arcjit_debug_1_3 PRIVATE arcjit_runtime)
+set_target_properties(arcjit_debug_1_3 PROPERTIES OUTPUT_NAME arcjit-debug-1-3)
+
+# --- Debug 17.1 -------------------------------------------------------------
+add_executable(arcjit_debug_17_1 debug_17_1.cpp)
+target_compile_features(arcjit_debug_17_1 PUBLIC cxx_std_23)
+target_compile_options(arcjit_debug_17_1 PRIVATE -Wall -Wextra -Wno-error)
+target_link_libraries(arcjit_debug_17_1 PRIVATE arcjit_runtime)
+set_target_properties(arcjit_debug_17_1 PROPERTIES OUTPUT_NAME arcjit-debug-17-1)

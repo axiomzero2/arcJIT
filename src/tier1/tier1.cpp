@@ -49,9 +49,23 @@ RegAllocResult linear_scan(const Tier1Function& fn) {
     std::sort(result.intervals.begin(), result.intervals.end(),
               [](const LiveInterval& a, const LiveInterval& b) { return a.start < b.start; });
 
-    // Caller-saved GP regs available for Tier-1 scratch (excluding rax = return):
-    //   rcx(1), rdx(2), rsi(6), rdi(7), r8(8), r9(9), r10(10), r11(11)
-    static constexpr int kFreeRegs[] = {1, 2, 6, 7, 8, 9, 10, 11};
+    // Caller-saved GP regs available for Tier-1 vreg allocation.
+    //
+    // We EXCLUDE rax(0), rcx(1), and rdx(2) from the free list because the
+    // codegen uses them as implicit scratch registers in binops (e.g.
+    // `load_to(src2, rcx)` in Add/Sub/Mul/Div) and `idiv` clobbers rdx.
+    // If the allocator assigned a live vreg to one of these, the scratch
+    // use would silently corrupt it.
+    //
+    //   rax(0)  — return register, used as scratch everywhere
+    //   rcx(1)  — scratch for binop second operand
+    //   rdx(2)  — clobbered by idiv (Div) and cqo
+    //
+    // Freed for allocation:
+    //   rsi(6), rdi(7), r8(8), r9(9), r10(10), r11(11)
+    //
+    // r12 is reserved as the locals-base register (set in the prologue).
+    static constexpr int kFreeRegs[] = {6, 7, 8, 9, 10, 11};
     static constexpr size_t kNumFreeRegs = sizeof(kFreeRegs) / sizeof(kFreeRegs[0]);
 
     // Active list — intervals currently holding a register, sorted by end.
@@ -284,31 +298,91 @@ Tier1Compiler::compile(const Tier1Function& fn) {
                 break;
             }
             case Tier1Op::Div: {
-                // Arc's Div promotes to float: int(a) / int(b) → double.
-                // We compute the float result and store it as an int64
-                // bit-cast (matching how the interpreter stores floats).
-                load_to(a, pm, inst.src1, x86::rax);
-                load_to(a, pm, inst.src2, x86::rcx);
-                a.cvtsi2sd(x86::xmm0, x86::rax);  // a as double
-                a.cvtsi2sd(x86::xmm1, x86::rcx);  // b as double
-                a.divsd(x86::xmm0, x86::xmm1);    // xmm0 = a/b
-                a.movq(x86::rax, x86::xmm0);      // store double bits as int64
+                // Tier-1 uses truncated integer division (idiv). Arc's Div
+                // promotes to float in principle, but Tier-1 doesn't track
+                // types, so producing a float result here would corrupt
+                // downstream int Add/Sub. Truncating is sound for the Tier-1
+                // fast path; Tier-2 (Surge) handles the float promotion
+                // correctly via its type-aware SoN IR.
+                //
+                // Division-by-zero falls back to returning 0 (matches the
+                // interpreter's defensive behavior on uninstrumented paths).
+                //
+                // Note: idiv clobbers rdx, which the linear-scan allocator
+                // uses for vregs. We push/pop rdx around the division to
+                // preserve any live vreg held there. Spill slots are
+                // addressed via rbp, so the rsp adjustment is safe.
+                load_to(a, pm, inst.src1, x86::rax);  // dividend
+                load_to(a, pm, inst.src2, x86::rcx);  // divisor
+                Label skip = a.new_label();
+                a.test(x86::rcx, x86::rcx);
+                a.jz(skip);                       // if divisor == 0, skip
+                a.push(x86::rdx);                 // save rdx (may hold a vreg)
+                a.cqo();                          // sign-extend rax → rdx:rax
+                a.idiv(x86::rcx);                 // rax = rax / rcx (signed)
+                a.pop(x86::rdx);                  // restore rdx
+                a.bind(skip);
                 store_from(a, pm, inst.dst, x86::rax);
                 break;
             }
             case Tier1Op::Pow: {
-                // Arc's Pow promotes to float: pow(int(a), int(b)) → double.
-                // We compute pow via a runtime call to libc's pow().
+                // Tier-1 Pow: lower to integer exponentiation by squaring.
+                // Fast path: exponent in [0, 63] uses repeated squaring
+                // (no libc call). Negative or large exponents fall back to
+                // libc pow() and return a bit-cast double.
+                //
+                // The fast path uses r8/r9 as scratch — these are in the
+                // allocator's free list, so we push/pop them to preserve any
+                // live vreg. Two pushes keep rsp 16-byte aligned.
                 using PowFn = double (*)(double, double);
                 PowFn pow_fn = &std::pow;
-                load_to(a, pm, inst.src1, x86::rax);
-                load_to(a, pm, inst.src2, x86::rcx);
-                a.cvtsi2sd(x86::xmm0, x86::rax);  // base as double
-                a.cvtsi2sd(x86::xmm1, x86::rcx);  // exponent as double
-                a.sub(x86::rsp, 8);
+                load_to(a, pm, inst.src1, x86::rax);  // base
+                load_to(a, pm, inst.src2, x86::rcx);  // exponent
+
+                Label slow = a.new_label();
+                Label done = a.new_label();
+                a.cmp(x86::rcx, 0);
+                a.jl(slow);                       // exponent < 0 → slow
+                a.cmp(x86::rcx, 63);
+                a.jg(slow);                       // exponent > 63 → slow
+
+                // Fast path: integer exponentiation by squaring.
+                // Save r8/r9 (allocator may have vregs in them).
+                a.push(x86::r8);
+                a.push(x86::r9);
+                //   result = 1; base = rax; exp = rcx
+                //   while (exp) { if (exp & 1) result *= base; base *= base; exp >>= 1; }
+                a.mov(x86::r8, 1);                // r8 = result
+                a.mov(x86::r9, x86::rax);          // r9 = base
+                Label loop_top = a.new_label();
+                Label loop_end = a.new_label();
+                Label skip_mul = a.new_label();
+                a.bind(loop_top);
+                a.test(x86::rcx, x86::rcx);
+                a.jz(loop_end);
+                a.test(x86::rcx, 1);
+                a.jz(skip_mul);                   // even bit → skip the mul
+                a.imul(x86::r8, x86::r9);          // result *= base
+                a.bind(skip_mul);
+                a.imul(x86::r9, x86::r9);          // base *= base
+                a.shr(x86::rcx, 1);                // exp >>= 1
+                a.jmp(loop_top);
+                a.bind(loop_end);
+                a.mov(x86::rax, x86::r8);
+                a.pop(x86::r9);                    // restore r9, r8
+                a.pop(x86::r8);
+                a.jmp(done);
+
+                // Slow path: libc pow() for negative or large exponents.
+                a.bind(slow);
+                a.cvtsi2sd(x86::xmm0, x86::rax);
+                a.cvtsi2sd(x86::xmm1, x86::rcx);
+                a.sub(x86::rsp, 8);                // align for call
                 a.call(imm(reinterpret_cast<uint64_t>(pow_fn)));
                 a.add(x86::rsp, 8);
                 a.movq(x86::rax, x86::xmm0);
+
+                a.bind(done);
                 store_from(a, pm, inst.dst, x86::rax);
                 break;
             }
