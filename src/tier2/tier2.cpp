@@ -541,42 +541,59 @@ public:
         }
 
         // Phase 1b: Emit all pure nodes that have NO control input AND whose
-        // data inputs are also control-free (e.g., constants created by
-        // ConstFold). Pure nodes that reference effectful nodes (like
-        // LoadLocal) must be emitted in their block, not here.
-        for (uint32_t i = 1; i < g.size(); ++i) {
-            NodeId id{static_cast<uint32_t>(i)};
-            const Node& n = g.at(id);
-            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-            if (is_block_header_(n.kind)) continue;
-            if (n.kind == NodeKind::Stop) continue;
-            if (!has_flag(n.flags, NodeFlags::Pure)) continue;
+        // data inputs are already emitted (or also control-free). We iterate
+        // to a fixpoint because pure nodes can chain (Add(Mul(Const, Const),
+        // Const) where Mul is also pure/no-control).
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (uint32_t i = 1; i < g.size(); ++i) {
+                NodeId id{static_cast<uint32_t>(i)};
+                if (node_to_vreg.count(i)) continue;  // already emitted
+                const Node& n = g.at(id);
+                if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+                if (is_block_header_(n.kind)) continue;
+                if (n.kind == NodeKind::Stop) continue;
+                if (!has_flag(n.flags, NodeFlags::Pure)) continue;
 
-            // Check if this node has any control input.
-            bool has_ctrl = false;
-            for (const auto& e : g.inputs_of(id)) {
-                if (e.kind == EdgeKind::Control) { has_ctrl = true; break; }
-            }
-            if (has_ctrl) continue;
+                // Check if this node has any control input.
+                bool has_ctrl = false;
+                for (const auto& e : g.inputs_of(id)) {
+                    if (e.kind == EdgeKind::Control) { has_ctrl = true; break; }
+                }
+                if (has_ctrl) continue;
 
-            // Check if ALL data inputs are also control-free pure nodes.
-            bool all_inputs_control_free = true;
-            for (const auto& e : g.inputs_of(id)) {
-                if (e.kind != EdgeKind::Data) continue;
-                if (!e.target.valid()) continue;
-                // If the producer has a control input, it's in a block —
-                // we can't emit this node yet.
-                for (const auto& pe : g.inputs_of(e.target)) {
-                    if (pe.kind == EdgeKind::Control) {
-                        all_inputs_control_free = false;
+                // Check if ALL data inputs are already emitted (have vregs)
+                // or are control-free pure nodes.
+                bool all_ready = true;
+                for (const auto& e : g.inputs_of(id)) {
+                    if (e.kind != EdgeKind::Data) continue;
+                    if (!e.target.valid()) continue;
+                    if (node_to_vreg.count(e.target.value)) continue;  // already emitted
+
+                    // Not emitted yet — check if it's control-free pure.
+                    const Node& prod = g.at(e.target);
+                    if (!has_flag(prod.flags, NodeFlags::Pure)) {
+                        all_ready = false;
                         break;
                     }
+                    bool prod_has_ctrl = false;
+                    for (const auto& pe : g.inputs_of(e.target)) {
+                        if (pe.kind == EdgeKind::Control) { prod_has_ctrl = true; break; }
+                    }
+                    if (prod_has_ctrl) {
+                        all_ready = false;
+                        break;
+                    }
+                    // It's control-free pure but not yet emitted — we'll
+                    // get it in the next iteration.
+                    all_ready = false;
                 }
-                if (!all_inputs_control_free) break;
-            }
 
-            if (all_inputs_control_free) {
-                emit_data_node_(id);
+                if (all_ready) {
+                    emit_data_node_(id);
+                    changed = true;
+                }
             }
         }
 

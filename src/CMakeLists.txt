@@ -101,3 +101,10 @@ target_compile_features(arcjit_cli PUBLIC cxx_std_23)
 target_compile_options(arcjit_cli PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(arcjit_cli PRIVATE arcjit_runtime)
 set_target_properties(arcjit_cli PROPERTIES OUTPUT_NAME arcjit-cli)
+
+# --- Benchmark --------------------------------------------------------------
+add_executable(arcjit_bench bench.cpp)
+target_compile_features(arcjit_bench PUBLIC cxx_std_23)
+target_compile_options(arcjit_bench PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+target_link_libraries(arcjit_bench PRIVATE arcjit_runtime)
+set_target_properties(arcjit_bench PROPERTIES OUTPUT_NAME arcjit-bench)
