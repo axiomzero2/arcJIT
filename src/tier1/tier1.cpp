@@ -552,7 +552,20 @@ Tier1Compiler::compile(const Tier1Function& fn) {
                 break;
             }
 
-            // Memory ops — scaffold (would call runtime helpers)
+            // Memory ops — scaffold. These require runtime helpers and a
+            // defined object layout (List, Instance, Function). Implementing
+            // them properly is a large project (calling convention, GC
+            // integration, deopt points).
+            //
+            // For now, emit `mov rax, 0` so programs that use these opcodes
+            // at Tier-1 still RUN (returning 0 / no-op for stores) rather
+            // than crash. The bench suite (e.g., 4.1 alloc_build_list)
+            // depends on this. Real production use should tier down to Spark
+            // (the interpreter) which has full implementations.
+            //
+            // TODO: implement these via runtime helper calls (CallNative
+            // pattern). The frame layout and GC integration need to be
+            // specified first.
             case Tier1Op::AllocList:
             case Tier1Op::ListAppend:
             case Tier1Op::ListGet:
@@ -562,8 +575,6 @@ Tier1Compiler::compile(const Tier1Function& fn) {
             case Tier1Op::SetField:
             case Tier1Op::Call:
             case Tier1Op::CallNative:
-                // For the scaffold: emit a mov 0 to dst. Real impl would call
-                // a runtime helper via absolute address.
                 a.mov(x86::rax, imm(0));
                 if (inst.dst != 0) store_from(a, pm, inst.dst, x86::rax);
                 break;

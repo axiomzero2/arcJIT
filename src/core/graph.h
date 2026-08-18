@@ -150,6 +150,50 @@ public:
         return out;
     }
 
+    // --- Use iteration ------------------------------------------------------
+    //
+    // Iterate the users of `producer` (nodes that have an input edge pointing
+    // at `producer`). Walks the intrusive use list, skipping stale entries
+    // (Uses left behind by replace_input whose edge was later re-patched).
+    //
+    // Returns (user, edge_kind) pairs so callers can filter by edge kind
+    // without re-reading the edge pool. O(use_count of producer) — NOT
+    // O(total edges). This is the key primitive for O(N+E) graph walks.
+    struct UseRef {
+        NodeId   user;
+        EdgeKind kind;
+    };
+    [[nodiscard]] std::vector<UseRef> uses_of(NodeId producer) const {
+        std::vector<UseRef> out;
+        if (!producer.valid() || producer.value >= node_use_heads_.size()) return out;
+        uint32_t use_idx = node_use_heads_[producer.value];
+        while (use_idx != 0xFFFFFFFFu) {
+            const Use& u = uses_[use_idx];
+            // Skip stale Uses (edge was re-patched to point elsewhere).
+            if (u.edge_idx < edges_.size() && edges_[u.edge_idx].target == producer) {
+                out.push_back({u.user, u.kind});
+            }
+            use_idx = u.next_use;
+        }
+        return out;
+    }
+
+    // Filtered variant: only users connected by a specific edge kind.
+    // Useful for control-successor / data-use / effect-use walks.
+    [[nodiscard]] std::vector<NodeId> uses_of_kind(NodeId producer, EdgeKind kind) const {
+        std::vector<NodeId> out;
+        if (!producer.valid() || producer.value >= node_use_heads_.size()) return out;
+        uint32_t use_idx = node_use_heads_[producer.value];
+        while (use_idx != 0xFFFFFFFFu) {
+            const Use& u = uses_[use_idx];
+            if (u.edge_idx < edges_.size() && edges_[u.edge_idx].target == producer && u.kind == kind) {
+                out.push_back(u.user);
+            }
+            use_idx = u.next_use;
+        }
+        return out;
+    }
+
     // --- Mutation -----------------------------------------------------------
     //
     // Replace one input edge of `id` at position `i` with `new_target`.

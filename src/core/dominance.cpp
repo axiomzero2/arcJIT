@@ -62,24 +62,24 @@ bool is_control_node(NodeKind k) {
 }
 
 // DFS from Start in post-order, collecting only control nodes.
+//
+// Uses the graph's intrusive use-list to find control successors in
+// O(uses_of_start) instead of O(graph_size). The previous implementation
+// scanned every node in the graph for each visit, making the DFS O(N²).
 void post_order_dfs(const Graph& g, NodeId start, std::vector<bool>& visited,
                     std::vector<NodeId>& post_order) {
     if (!start.valid() || start.value >= g.size()) return;
     if (visited[start.value]) return;
     visited[start.value] = true;
 
-    // Visit control successors (nodes whose Control input is `start`).
-    for (uint32_t i = 1; i < g.size(); ++i) {
-        NodeId id{static_cast<uint32_t>(i)};
-        const Node& n = g.at(id);
+    // Visit control successors: nodes that have a Control input edge
+    // pointing at `start`. The use-list gives us these directly.
+    for (NodeId succ : g.uses_of_kind(start, EdgeKind::Control)) {
+        if (succ.value >= g.size()) continue;
+        const Node& n = g.at(succ);
         if (has_flag(n.flags, NodeFlags::IsDead)) continue;
         if (!is_control_node(n.kind)) continue;
-        for (const auto& e : g.inputs_of(id)) {
-            if (e.kind == EdgeKind::Control && e.target == start) {
-                post_order_dfs(g, id, visited, post_order);
-                break;
-            }
-        }
+        post_order_dfs(g, succ, visited, post_order);
     }
 
     post_order.push_back(start);
@@ -165,19 +165,27 @@ void post_order_dfs(const Graph& g, NodeId start, std::vector<bool>& visited,
         }
     }
 
-    // Compute depths.
+    // Compute depths via BFS from start.
+    //
+    // Build a children[] list (inverse of idom) so we can walk the dom tree
+    // top-down in O(N) instead of scanning all N nodes per BFS pop (which
+    // made this O(N²)).
+    std::vector<std::vector<uint32_t>> children(g.size());
+    for (uint32_t i = 1; i < g.size(); ++i) {
+        if (dom.reachable[i] && i != start.value) {
+            uint32_t idom = dom.idom[i];
+            if (idom != 0) children[idom].push_back(i);
+        }
+    }
     std::queue<uint32_t> worklist;
     worklist.push(start.value);
     dom.depth[start.value] = 0;
     while (!worklist.empty()) {
         uint32_t n = worklist.front();
         worklist.pop();
-        for (uint32_t i = 1; i < g.size(); ++i) {
-            if (i == n) continue;
-            if (dom.idom[i] == n && dom.depth[i] == 0 && i != start.value) {
-                dom.depth[i] = dom.depth[n] + 1;
-                worklist.push(i);
-            }
+        for (uint32_t c : children[n]) {
+            dom.depth[c] = dom.depth[n] + 1;
+            worklist.push(c);
         }
     }
 
@@ -233,23 +241,22 @@ void post_order_dfs(const Graph& g, NodeId start, std::vector<bool>& visited,
                 // Actually, the correct check is: target dominates src,
                 // and there exists a path from src back to target that
                 // doesn't go through target's idom. We approximate this
-                // by checking if src can reach target.
+                // by checking if src can reach target via control successors.
+                //
+                // Uses the graph's use-list to find control successors in
+                // O(uses_of_node) instead of O(graph_size) per BFS step.
+                // The previous implementation was O(N²) per back-edge
+                // candidate.
                 std::vector<bool> visited(g.size(), false);
                 std::queue<uint32_t> reach_q;
                 // Start from src's control successors.
-                for (uint32_t j = 1; j < g.size(); ++j) {
-                    if (j == src.value) continue;
-                    NodeId sid{static_cast<uint32_t>(j)};
-                    const Node& sn = g.at(sid);
+                for (NodeId succ : g.uses_of_kind(src, EdgeKind::Control)) {
+                    if (succ.value >= g.size() || visited[succ.value]) continue;
+                    const Node& sn = g.at(succ);
                     if (has_flag(sn.flags, NodeFlags::IsDead)) continue;
                     if (!is_control_node(sn.kind)) continue;
-                    for (const auto& se : g.inputs_of(sid)) {
-                        if (se.kind == EdgeKind::Control && se.target == src) {
-                            reach_q.push(j);
-                            visited[j] = true;
-                            break;
-                        }
-                    }
+                    reach_q.push(succ.value);
+                    visited[succ.value] = true;
                 }
                 bool found_cycle = false;
                 while (!reach_q.empty() && !found_cycle) {
@@ -259,19 +266,13 @@ void post_order_dfs(const Graph& g, NodeId start, std::vector<bool>& visited,
                         found_cycle = true;
                         break;
                     }
-                    for (uint32_t j = 1; j < g.size(); ++j) {
-                        if (visited[j]) continue;
-                        NodeId sid{static_cast<uint32_t>(j)};
-                        const Node& sn = g.at(sid);
+                    for (NodeId succ : g.uses_of_kind(NodeId{cur}, EdgeKind::Control)) {
+                        if (succ.value >= g.size() || visited[succ.value]) continue;
+                        const Node& sn = g.at(succ);
                         if (has_flag(sn.flags, NodeFlags::IsDead)) continue;
                         if (!is_control_node(sn.kind)) continue;
-                        for (const auto& se : g.inputs_of(sid)) {
-                            if (se.kind == EdgeKind::Control && se.target.value == cur) {
-                                visited[j] = true;
-                                reach_q.push(j);
-                                break;
-                            }
-                        }
+                        visited[succ.value] = true;
+                        reach_q.push(succ.value);
                     }
                 }
                 if (!found_cycle) continue;

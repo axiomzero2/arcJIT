@@ -294,6 +294,14 @@ private:
     }
 
     // --- The dispatch loop -------------------------------------------------
+    //
+    // NOTE: a computed-goto dispatch (GCC `goto *labels[op]` extension) would
+    // give ~15-25% speedup vs switch dispatch by giving each opcode its own
+    // branch-predictor history. The full refactor requires rewriting all
+    // `case OpCode::X:` labels as `L_X:` labels and removing the switch
+    // wrapper — deferred for now to avoid a risky large change. The switch
+    // below is the hot path; -fno-exceptions/-fno-rtti + LTO already let
+    // the compiler optimize it reasonably.
     InterpResult dispatch_loop_(CallFrame& frame) {
         InterpResult result;
         result.value = Value::undef();
@@ -303,9 +311,6 @@ private:
         // instructions, not every instruction. The fast path of
         // check_safepoint is a single relaxed atomic load, but on a tight
         // interpreter loop even that's measurable (~3-5% of dispatch time).
-        // Backedge-only polling would be even better, but Arc bytecode
-        // doesn't expose backedge info cheaply; a counter-based poll is a
-        // reasonable middle ground.
         constexpr uint32_t kSafepointPollInterval = 64;
         uint32_t op_counter = 0;
 
