@@ -125,3 +125,10 @@ target_compile_features(arcjit_diag PUBLIC cxx_std_23)
 target_compile_options(arcjit_diag PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
 target_link_libraries(arcjit_diag PRIVATE arcjit_runtime)
 set_target_properties(arcjit_diag PROPERTIES OUTPUT_NAME arcjit-diag)
+
+# --- Benchmark Suite --------------------------------------------------------
+add_executable(arcjit_suite bench_suite.cpp)
+target_compile_features(arcjit_suite PUBLIC cxx_std_23)
+target_compile_options(arcjit_suite PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+target_link_libraries(arcjit_suite PRIVATE arcjit_runtime)
+set_target_properties(arcjit_suite PROPERTIES OUTPUT_NAME arcjit-suite)
