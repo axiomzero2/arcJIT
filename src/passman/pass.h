@@ -11,11 +11,13 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/dominance.h"
 #include "core/graph.h"
 #include "passman/instrument.h"
 
@@ -51,8 +53,21 @@ public:
     // Run on a graph. Must be idempotent.
     virtual PassResult run(Graph& g) = 0;
 
+    // Invalidate any cached analysis (dominance, loop info, etc.). Called
+    // by the pipeline when ANY pass reports a change — the conservative
+    // assumption is that structural changes invalidate everything.
+    //
+    // Default impl clears `analysis_valid_`. Subclasses that cache analyses
+    // (e.g., LICM caches dominance + loop info) should override to clear
+    // their own state too.
+    virtual void invalidate_analysis() { analysis_valid_ = false; }
+
+    [[nodiscard]] bool analysis_valid() const noexcept { return analysis_valid_; }
+    void mark_analysis_valid() noexcept { analysis_valid_ = true; }
+
 private:
     std::string_view name_;
+    bool analysis_valid_ = false;
 };
 
 // Pipeline of passes. Runs each pass once, optionally to a fixpoint.
@@ -91,8 +106,16 @@ public:
             verify_or_die(g, std::format("after pass {}", p->name()));
 #endif
 
-            if (!r.changed) {
-                // No-op pass: skip in future runs.
+            // If this pass changed the graph, every OTHER pass's cached
+            // analysis is now stale. Conservative: invalidate everything.
+            // (The pass that just ran may keep its own cache if it knows
+            // its changes don't affect its own analysis — but that's rare.)
+            if (r.changed) {
+                for (auto& other : passes_) {
+                    if (other.get() != p.get()) {
+                        other->invalidate_analysis();
+                    }
+                }
             }
         }
         return total;
@@ -173,10 +196,20 @@ public:
 
 // Loop invariant code motion — hoist pure, loop-invariant operations
 // out of loops. Requires loop detection (Loop + LoopExit nodes).
+//
+// Caches dominance + loop info across fixpoint iterations. The pipeline
+// calls invalidate_analysis() when any other pass changes the graph
+// structurally; LICM then re-computes on its next run.
 class LICMPass : public Pass {
 public:
     LICMPass() : Pass("LICM") {}
     PassResult run(Graph& g) override;
+    void invalidate_analysis() override;
+
+private:
+    // Cached analysis. Both empty when invalid.
+    std::optional<DominanceInfo> cached_dom_;
+    std::optional<LoopInfo>      cached_loops_;
 };
 
 // Escape analysis — prove that an Allocate doesn't escape the function.

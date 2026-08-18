@@ -51,29 +51,47 @@ RegAllocResult linear_scan(const Tier1Function& fn) {
 
     // Caller-saved GP regs available for Tier-1 vreg allocation.
     //
-    // We EXCLUDE rax(0), rcx(1), and rdx(2) from the free list because the
-    // codegen uses them as implicit scratch registers in binops (e.g.
-    // `load_to(src2, rcx)` in Add/Sub/Mul/Div) and `idiv` clobbers rdx.
-    // If the allocator assigned a live vreg to one of these, the scratch
-    // use would silently corrupt it.
+    // We use the full set of non-scratch GP regs:
+    //   - Caller-saved: rsi(6), rdi(7), r8(8), r9(9), r10(10), r11(11) — 6 regs
+    //   - Callee-saved: rbx(3), r13(13), r14(14), r15(15) — 4 regs (saved in prologue)
     //
-    //   rax(0)  — return register, used as scratch everywhere
-    //   rcx(1)  — scratch for binop second operand
-    //   rdx(2)  — clobbered by idiv (Div) and cqo
+    // We EXCLUDE rax(0), rcx(1), rdx(2) — they're used as implicit scratch
+    // in binops (load_to(src2, rcx) in Add/Sub/Mul/Div) and idiv clobbers
+    // rdx. r12 is reserved as the locals-base register (set in prologue).
     //
-    // Freed for allocation:
-    //   rsi(6), rdi(7), r8(8), r9(9), r10(10), r11(11)
-    //
-    // r12 is reserved as the locals-base register (set in the prologue).
-    static constexpr int kFreeRegs[] = {6, 7, 8, 9, 10, 11};
+    // The previous implementation only used 6 caller-saved regs, leaving
+    // rbx/r13/r14/r15 idle — forcing spills much earlier than necessary.
+    static constexpr int kFreeRegs[] = {3, 6, 7, 8, 9, 10, 11, 13, 14, 15};
     static constexpr size_t kNumFreeRegs = sizeof(kFreeRegs) / sizeof(kFreeRegs[0]);
+    static_assert(kNumFreeRegs == 10);
 
-    // Active list — intervals currently holding a register, sorted by end.
+    // Active list — intervals currently holding a register.
+    //
+    // Bounded by kNumFreeRegs (10), so the linear scans in expire_old and
+    // max_element are O(10) = O(1) worst case. Using std::vector<LiveInterval*>
+    // here is simpler than a priority queue and has the same constant-time
+    // bound in practice (the active list rarely fills past 3-4 entries for
+    // the small functions Tier-1 typically compiles).
+    //
+    // `used` is a fixed-size bitset tracking which kFreeRegs indices are
+    // currently in use — makes the "find a free reg" scan O(kNumFreeRegs)
+    // instead of O(active.size() × kNumFreeRegs).
     std::vector<LiveInterval*> active;
+    active.reserve(kNumFreeRegs);
+    bool used[kNumFreeRegs] = {};
+
+    auto phys_to_index = [](int phys) -> int {
+        for (size_t i = 0; i < kNumFreeRegs; ++i) {
+            if (kFreeRegs[i] == phys) return static_cast<int>(i);
+        }
+        return -1;
+    };
 
     auto expire_old = [&](uint32_t now) {
         std::erase_if(active, [&](LiveInterval* a) {
             if (a->end < now) {
+                int idx = phys_to_index(a->assigned_reg);
+                if (idx >= 0) used[idx] = false;
                 return true;
             }
             return false;
@@ -84,19 +102,18 @@ RegAllocResult linear_scan(const Tier1Function& fn) {
         expire_old(interval.start);
 
         if (active.size() < kNumFreeRegs) {
-            // Find the lowest-numbered free reg not in use by `active`.
-            bool used[kNumFreeRegs] = {};
-            for (auto* a : active) {
-                for (size_t i = 0; i < kNumFreeRegs; ++i) {
-                    if (a->assigned_reg == kFreeRegs[i]) used[i] = true;
-                }
-            }
+            // Find the lowest-indexed free reg using the `used` bitset.
             int reg = -1;
             for (size_t i = 0; i < kNumFreeRegs; ++i) {
-                if (!used[i]) { reg = kFreeRegs[i]; break; }
+                if (!used[i]) {
+                    reg = kFreeRegs[i];
+                    used[i] = true;
+                    break;
+                }
             }
             if (reg < 0) {
-                // Shouldn't happen, but spill to be safe.
+                // Shouldn't happen (active.size() < kNumFreeRegs guarantees
+                // a free slot exists), but spill to be safe.
                 result.vreg_to_stack[interval.vreg] = result.max_stack_slots++;
             } else {
                 interval.assigned_reg = reg;
@@ -146,12 +163,16 @@ struct PhysMap {
             case 0:  return asmjit::x86::rax;
             case 1:  return asmjit::x86::rcx;
             case 2:  return asmjit::x86::rdx;
+            case 3:  return asmjit::x86::rbx;
             case 6:  return asmjit::x86::rsi;
             case 7:  return asmjit::x86::rdi;
             case 8:  return asmjit::x86::r8;
             case 9:  return asmjit::x86::r9;
             case 10: return asmjit::x86::r10;
             case 11: return asmjit::x86::r11;
+            case 13: return asmjit::x86::r13;
+            case 14: return asmjit::x86::r14;
+            case 15: return asmjit::x86::r15;
             default: return asmjit::x86::rax;  // spilled vregs use stack
         }
     }
@@ -209,20 +230,36 @@ Tier1Compiler::compile(const Tier1Function& fn) {
     // --- Prologue --------------------------------------------------------
     // Entry signature: int64_t (*)(void* ctx)
     //   rdi = ctx (pointer to locals array)
+    //
+    // We save rbp + 5 callee-saved regs (r12, rbx, r13, r14, r15) — 48 bytes
+    // total of pushes. After `sub rsp, stack_bytes` (rounded to 16-byte
+    // alignment), rsp stays 16-byte aligned at function calls.
     a.push(x86::rbp);
     a.mov(x86::rbp, x86::rsp);
 
-    // Allocate stack space for spilled vregs. Round up to 16-byte alignment.
+    // Save callee-saved regs we use for vreg allocation. Pushed in a fixed
+    // order so the epilogue can pop them in reverse.
+    //   r12  — reserved as locals base register
+    //   rbx  — vreg allocation
+    //   r13  — vreg allocation
+    //   r14  — vreg allocation
+    //   r15  — vreg allocation
+    a.push(x86::r12);
+    a.push(x86::rbx);
+    a.push(x86::r13);
+    a.push(x86::r14);
+    a.push(x86::r15);
+
+    // Save the ctx pointer (rdi) into r12 — our locals base register.
+    a.mov(x86::r12, x86::rdi);
+
+    // Allocate stack space for spilled vregs. Round up to 16-byte alignment
+    // so future calls stay aligned.
     int stack_bytes = ra.max_stack_slots * 8;
     if (stack_bytes % 16 != 0) stack_bytes += 8;
     if (stack_bytes > 0) {
         a.sub(x86::rsp, stack_bytes);
     }
-
-    // Save the ctx pointer (rdi) — we use r12 as our "locals base" register.
-    // r12 is callee-saved, so we push it in the prologue.
-    a.push(x86::r12);
-    a.mov(x86::r12, x86::rdi);  // locals base
 
     // Pre-create labels for each label ID in the function.
     std::vector<Label> labels(fn.label_count);
@@ -562,6 +599,11 @@ Tier1Compiler::compile(const Tier1Function& fn) {
 
     a.bind(epilogue);
     // --- Epilogue --------------------------------------------------------
+    // Pop callee-saved regs in reverse order of the prologue pushes.
+    a.pop(x86::r15);
+    a.pop(x86::r14);
+    a.pop(x86::r13);
+    a.pop(x86::rbx);
     a.pop(x86::r12);
     a.leave();           // mov rsp, rbp ; pop rbp
     a.ret();

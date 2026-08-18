@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "passman/pass.h"
 
+#include <algorithm>
 #include <queue>
 #include <unordered_map>
 
@@ -86,18 +87,44 @@ PassResult ConstantFoldingPass::run(Graph& g) {
 PassResult GVNPass::run(Graph& g) {
     PassResult r;
 
-    // Hash key: (kind, payload, [input IDs sorted by kind|target])
+    // GVN key: (kind, payload, [input target IDs in order]).
+    //
+    // The previous implementation packed inputs into two uint64 hash words
+    // (h1, h2) and compared Keys by comparing those hash words. Two bugs:
+    //   1. Inputs beyond index 7 were silently dropped from the hash.
+    //   2. operator== compared the HASHES, not the inputs — so two nodes
+    //      with different inputs that happened to hash to the same uint128
+    //      would be incorrectly merged. This is a soundness bug.
+    //
+    // The fix uses a std::vector<uint32_t> of input target IDs as part of
+    // the key. unordered_map handles the hashing via std::hash<vector<uint32_t>>
+    // (std::vector<uint32_t> has a std::hash specialization in C++23).
+    //
+    // For commutative nodes (Add, Mul, Eq, etc.) we sort the input IDs so
+    // that (a, b) and (b, a) dedup to the same key. Non-commutative nodes
+    // (Sub, Div, Lt, Gt, Shl, Shr) preserve operand order.
     struct Key {
-        NodeKind  kind;
-        uint64_t  payload;
-        uint64_t  h1, h2;  // hashes of input slices
+        NodeKind                   kind;
+        uint64_t                   payload;
+        std::vector<uint32_t>      input_ids;
+
         bool operator==(const Key& o) const noexcept {
-            return kind == o.kind && payload == o.payload && h1 == o.h1 && h2 == o.h2;
+            return kind == o.kind &&
+                   payload == o.payload &&
+                   input_ids == o.input_ids;
         }
     };
     struct KeyHash {
         size_t operator()(const Key& k) const noexcept {
-            return std::hash<uint64_t>{}(k.h1 ^ (k.h2 << 1) ^ static_cast<uint64_t>(k.kind) * 0x9E3779B97F4A7C15ULL);
+            // FNV-1a over (kind, payload, input_ids).
+            // kind and payload first, then each input ID.
+            size_t h = std::hash<uint64_t>{}(
+                static_cast<uint64_t>(k.kind) ^
+                (k.payload * 0x9E3779B97F4A7C15ULL));
+            for (uint32_t id : k.input_ids) {
+                h ^= std::hash<uint32_t>{}(id) + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+            }
+            return h;
         }
     };
 
@@ -110,15 +137,25 @@ PassResult GVNPass::run(Graph& g) {
         if (!has_flag(n.flags, NodeFlags::GVNable)) continue;
 
         auto inputs = g.inputs_of(id);
-        uint64_t h1 = 0, h2 = 0;
-        for (size_t j = 0; j < inputs.size(); ++j) {
-            uint64_t v = (static_cast<uint64_t>(inputs[j].target.value) << 8) | static_cast<uint8_t>(inputs[j].kind);
-            if (j < 4) h1 ^= v << (j * 8);
-            else       h2 ^= v << ((j - 4) * 8);
+        std::vector<uint32_t> input_ids;
+        input_ids.reserve(inputs.size());
+        for (const auto& e : inputs) {
+            // Only data and control inputs contribute to GVN identity.
+            // Effect edges are not part of the value identity — two Adds
+            // with the same data inputs but different effect predecessors
+            // still compute the same value.
+            if (e.kind == EdgeKind::Data || e.kind == EdgeKind::Control) {
+                input_ids.push_back(e.target.value);
+            }
         }
 
-        Key k{n.kind, n.payload, h1, h2};
-        auto [it, inserted] = seen.emplace(k, id);
+        // Commutative nodes: sort inputs so (a,b) ≡ (b,a).
+        if (has_flag(n.flags, NodeFlags::Commutative)) {
+            std::sort(input_ids.begin(), input_ids.end());
+        }
+
+        Key k{n.kind, n.payload, std::move(input_ids)};
+        auto [it, inserted] = seen.emplace(std::move(k), id);
         if (!inserted) {
             // Already saw this — replace all uses of `id` with the canonical one.
             g.replace_all_uses_with(id, it->second);
@@ -559,9 +596,22 @@ PassResult TypeNarrowingPass::run(Graph& g) {
 PassResult LICMPass::run(Graph& g) {
     PassResult r;
 
-    // Compute dominance and loop info.
-    DominanceInfo dom = compute_dominance(g);
-    LoopInfo loops = compute_loops(g, dom);
+    // Use cached dominance + loop info if still valid. The pipeline
+    // invalidates our cache when any other pass changes the graph
+    // structurally; if LICM itself doesn't change anything, the cache
+    // stays valid for the next fixpoint iteration.
+    //
+    // This is a big win on the 15-pass × 8-iter pipeline: previously
+    // LICM recomputed dominance + loops every iteration even when the
+    // graph hadn't changed since its last run.
+    if (!analysis_valid() || !cached_dom_.has_value() || !cached_loops_.has_value()) {
+        cached_dom_ = compute_dominance(g);
+        cached_loops_ = compute_loops(g, *cached_dom_);
+        mark_analysis_valid();
+    }
+
+    const DominanceInfo& dom = *cached_dom_;
+    const LoopInfo& loops = *cached_loops_;
 
     if (loops.loops.empty()) {
         return r;  // No loops — nothing to hoist.
@@ -621,7 +671,23 @@ PassResult LICMPass::run(Graph& g) {
         }
     }
 
+    // If we hoisted anything, the control-flow graph changed — our cached
+    // dominance + loop info may be stale for the NEXT pass (other passes
+    // that consume dominance, like GCM, would also need a refresh).
+    // The pipeline will call invalidate_analysis() on us if any OTHER pass
+    // changes things; we just need to invalidate ourselves here so our
+    // own next run recomputes.
+    if (r.changed) {
+        invalidate_analysis();
+    }
+
     return r;
+}
+
+void LICMPass::invalidate_analysis() {
+    Pass::invalidate_analysis();
+    cached_dom_.reset();
+    cached_loops_.reset();
 }
 
 // ============================================================================

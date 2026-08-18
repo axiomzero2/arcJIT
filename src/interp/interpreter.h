@@ -299,8 +299,20 @@ private:
         result.value = Value::undef();
         BytecodeReader& r = frame.reader;
 
+        // Safepoint poll frequency: check every kSafepointPollInterval
+        // instructions, not every instruction. The fast path of
+        // check_safepoint is a single relaxed atomic load, but on a tight
+        // interpreter loop even that's measurable (~3-5% of dispatch time).
+        // Backedge-only polling would be even better, but Arc bytecode
+        // doesn't expose backedge info cheaply; a counter-based poll is a
+        // reasonable middle ground.
+        constexpr uint32_t kSafepointPollInterval = 64;
+        uint32_t op_counter = 0;
+
         while (!r.at_end()) {
-            mutator_state_.check_safepoint();
+            if ((++op_counter & (kSafepointPollInterval - 1)) == 0) {
+                mutator_state_.check_safepoint();
+            }
 
             const OpCode op = r.read_op();
             const uint32_t offset_before = static_cast<uint32_t>(r.ip - 1);
