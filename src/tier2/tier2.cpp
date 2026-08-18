@@ -1068,6 +1068,7 @@ void build_demo_graph(Graph& g) {
     pipe.add(std::make_unique<TypeNarrowingPass>());
     pipe.add(std::make_unique<CallInliningPass>());
     pipe.add(std::make_unique<EscapeAnalysisPass>());
+    pipe.add(std::make_unique<LocalForwardingPass>());  // store-to-load forwarding
     pipe.add(std::make_unique<GVNPass>());
     pipe.add(std::make_unique<ConstantFoldingPass>());
     pipe.add(std::make_unique<AlgebraicSimplificationPass>());

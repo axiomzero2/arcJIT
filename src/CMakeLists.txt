@@ -118,3 +118,10 @@ target_compile_features(arcjit_profiler PUBLIC cxx_std_23)
 target_compile_options(arcjit_profiler PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
 target_link_libraries(arcjit_profiler PRIVATE arcjit_runtime)
 set_target_properties(arcjit_profiler PROPERTIES OUTPUT_NAME arcjit-profiler)
+
+# --- Gigavolt Diagnostic ----------------------------------------------------
+add_executable(arcjit_diag gigavolt_diag.cpp)
+target_compile_features(arcjit_diag PUBLIC cxx_std_23)
+target_compile_options(arcjit_diag PRIVATE -Wall -Wextra -Wpedantic -Wno-error)
+target_link_libraries(arcjit_diag PRIVATE arcjit_runtime)
+set_target_properties(arcjit_diag PROPERTIES OUTPUT_NAME arcjit-diag)

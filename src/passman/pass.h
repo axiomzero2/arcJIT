@@ -73,6 +73,17 @@ public:
             PassResult r = p->run(g);
             total |= r;
 
+            // Record pass results as instrumentation events.
+            if (r.changed) {
+                instr.record(PassEventType::NodeChanged, p->name());
+            }
+            if (r.nodes_added > 0) {
+                instr.record(PassEventType::NodeCreated, p->name());
+            }
+            if (r.nodes_removed > 0) {
+                instr.record(PassEventType::NodeDeleted, p->name());
+            }
+
             instr.record(PassEventType::PassEnd, p->name());
 
 #ifndef NDEBUG
@@ -197,6 +208,15 @@ public:
 class GlobalCodeMotionPass : public Pass {
 public:
     GlobalCodeMotionPass() : Pass("GCM") {}
+    PassResult run(Graph& g) override;
+};
+
+// Local store-to-load forwarding — if a LoadLocal reads a slot that was
+// just stored by a StoreLocal with a constant value, replace the LoadLocal
+// with the constant. This enables ConstFold to fire on local-using code.
+class LocalForwardingPass : public Pass {
+public:
+    LocalForwardingPass() : Pass("LocalForward") {}
     PassResult run(Graph& g) override;
 };
 
