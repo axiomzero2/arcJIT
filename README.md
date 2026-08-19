@@ -67,20 +67,6 @@ in results indicates a bug. The fuzzer found two real bugs that were fixed:
    `LoadConstImm(0)` placeholders). Fixed by doing a DFS post-order
    traversal from the Stop node.
 
-### Testing & debugging infrastructure (Rules 36-43)
-
-| Component | Status |
-| --- | --- |
-| Textual IR dumper (`dump_graph_text`) | implemented |
-| Graph verifier (runs after every pass in debug builds) | implemented |
-| Golden test runner (`.in.ir` / `.out.ir` files, `--update-golden`) | implemented |
-| 108 golden tests (12 each for 9 passes) | implemented |
-| Replay serialization (bytecode + options → binary file) | implemented |
-| Differential testing (interpreter ↔ Tier-1 ↔ Tier-2) | implemented |
-| Pass instrumentation (PassEvent, timeline, env-var breakpoints) | implemented |
-| Deopt validator (reconstruct state, compare against expected) | implemented |
-| Structure-aware bytecode fuzzer (1000+ test cases) | implemented |
-| Rule 36 regression tests (5 tests for the Tier-2 branch bug) | implemented |
 
 ## Dependencies
 
