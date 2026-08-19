@@ -16,7 +16,7 @@ TEST(GroundFaultTest, record_and_count) {
     e.reason = DeoptReason::ShapeMismatch;
     e.chunk_offset = 42;
     e.code_id = 1;
-    e.function_name = "test_fn";
+    e.set_function_name("test_fn");
     gf.record(e);
     EXPECT_EQ(gf.total_deopts(), 1u);
     EXPECT_EQ(gf.deopts_for_chunk(42), 1u);
@@ -62,7 +62,7 @@ TEST(GroundFaultTest, dump_nonempty) {
     DeoptEvent e;
     e.reason = DeoptReason::BoundsCheck;
     e.chunk_offset = 7;
-    e.function_name = "fn";
+    e.set_function_name("fn");
     gf.record(e);
     auto s = gf.dump();
     EXPECT_FALSE(s.empty());

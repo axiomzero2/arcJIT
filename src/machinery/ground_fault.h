@@ -9,10 +9,13 @@
 //   - detect deopt storms
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -38,9 +41,22 @@ struct DeoptEvent {
     uint64_t     timestamp_ns;
     uint64_t     expected_value;     // what the JIT assumed
     uint64_t     actual_value;       // what actually happened
-    std::string  function_name;
+    // Fixed-size function name buffer — avoids heap allocation on the
+    // hot deopt path. The previous implementation used std::string,
+    // which allocated under the GroundFault mutex on every deopt.
+    // 64 chars is enough for typical function names; longer names are
+    // truncated.
+    static constexpr size_t kMaxFnName = 64;
+    char         function_name[kMaxFnName] = {};
     uint8_t      from_tier;          // which tier deopted (0=Spark, 1=Jolt, 2=Surge)
     bool         recompiled;         // was it recompiled after?
+
+    // Set function name from a string_view. Truncates if too long.
+    void set_function_name(std::string_view name) noexcept {
+        size_t len = std::min(name.size(), kMaxFnName - 1);
+        std::memcpy(function_name, name.data(), len);
+        function_name[len] = '\0';
+    }
 };
 
 class GroundFault {

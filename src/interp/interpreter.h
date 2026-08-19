@@ -76,7 +76,11 @@ public:
     static constexpr size_t kLocalsMax      = 65536;
     static constexpr size_t kFrameMax       = 1024;
     static constexpr size_t kTryMax         = 256;
-    static constexpr uint32_t kHotThreshold = 200;  // invocations before Tier 1 fires
+    static constexpr uint32_t kHotThreshold = 100;  // invocations before Tier 1 fires
+    // NOTE: this MUST match Runtime::kHotThreshold. The two used to be
+    // inconsistent (Runtime=100, Interpreter=200) which caused the
+    // interpreter to report `is_hot` later than the runtime's tier-up
+    // logic, leading to confusing tier-up behavior.
 
     Interpreter() {
         stack_.reserve(kStackMax);

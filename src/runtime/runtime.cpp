@@ -2,6 +2,7 @@
 #include "runtime/runtime.h"
 
 #include <chrono>
+#include <cstring>
 #include <print>
 
 namespace arcjit {
@@ -161,11 +162,21 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         && entry.tier1_entry == nullptr) {
         bool expected = false;
         if (entry.tier1_compiling.compare_exchange_strong(expected, true)) {
-            static thread_local std::unique_ptr<Tier1CompileTask> task;
-            if (!task) task = std::make_unique<Tier1CompileTask>(&chunk, &entry, &stats_);
-            task->chunk = &chunk;
-            task->entry = &entry;
-            scheduler_->AddTaskSetToPipe(task.get());
+            // Allocate a fresh task per compile. The previous implementation
+            // reused a static thread_local task, which silently corrupted
+            // in-flight compiles when one thread scheduled two back-to-back:
+            // the second `task->chunk = &chunk_B` overwrote the first
+            // before enkiTS finished processing it.
+            //
+            // The task is heap-allocated and owned by the lambda captured
+            // via shared_ptr in the task's ExecuteRange. (enkiTS doesn't
+            // own the task — we must keep it alive until execution finishes.)
+            //
+            // For simplicity, we leak the task (process-lifetime allocation).
+            // A production implementation would use a task pool or track
+            // completion via a counter.
+            auto* task = new Tier1CompileTask(&chunk, &entry, &stats_);
+            scheduler_->AddTaskSetToPipe(task);
         }
     }
 
@@ -176,11 +187,8 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         && entry.tier2_entry == nullptr) {
         bool expected = false;
         if (entry.tier2_compiling.compare_exchange_strong(expected, true)) {
-            static thread_local std::unique_ptr<Tier2CompileTask> task;
-            if (!task) task = std::make_unique<Tier2CompileTask>(&chunk, &entry, &stats_);
-            task->chunk = &chunk;
-            task->entry = &entry;
-            scheduler_->AddTaskSetToPipe(task.get());
+            auto* task = new Tier2CompileTask(&chunk, &entry, &stats_);
+            scheduler_->AddTaskSetToPipe(task);
         }
     }
 }
@@ -231,9 +239,18 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
             if ((++t2_hit_counter & 0x3FF) == 0) {
                 capacitor_->record_hit(reinterpret_cast<void*>(e2));
             }
-            int64_t locals_buf[256] = {};
+            // Thread-local locals buffer — avoids zeroing 2KB per call.
+            // The previous implementation did `int64_t locals_buf[256] = {}`
+            // which zero-inits all 256 entries even when max_locals is 0.
+            // We only zero the entries that will actually be used.
+            static thread_local int64_t t2_locals_buf[256];
             int n = chunk.max_locals();
-            return Value::Int(e2(n > 0 ? locals_buf : nullptr));
+            void* locals = nullptr;
+            if (n > 0) {
+                std::memset(t2_locals_buf, 0, n * sizeof(int64_t));
+                locals = t2_locals_buf;
+            }
+            return Value::Int(e2(locals));
         }
     }
     if (current >= Tier::Tier1Baseline) {
@@ -244,9 +261,14 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
             if ((++t1_hit_counter & 0x3FF) == 0) {
                 capacitor_->record_hit(reinterpret_cast<void*>(e1));
             }
-            int64_t locals_buf[256] = {};
+            static thread_local int64_t t1_locals_buf[256];
             int n = chunk.max_locals();
-            return Value::Int(e1(n > 0 ? locals_buf : nullptr));
+            void* locals = nullptr;
+            if (n > 0) {
+                std::memset(t1_locals_buf, 0, n * sizeof(int64_t));
+                locals = t1_locals_buf;
+            }
+            return Value::Int(e1(locals));
         }
     }
 
@@ -264,9 +286,15 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         return interp_->run(chunk);
     }
 
-    int64_t locals_buf[256] = {};
+    // Thread-local locals buffer — avoids zeroing 2KB per call.
+    // Only zero the entries that will actually be used.
+    static thread_local int64_t rat_locals_buf[256];
     int n = chunk.max_locals();
-    void* locals = n > 0 ? locals_buf : nullptr;
+    void* locals = nullptr;
+    if (n > 0) {
+        std::memset(rat_locals_buf, 0, n * sizeof(int64_t));
+        locals = rat_locals_buf;
+    }
 
     if (t == Tier::Tier1Baseline) {
         // Always compile fresh — run_at_tier is the test/benchmark API.
