@@ -20,32 +20,10 @@ The architecture is the same one used by V8 (Ignition → Sparkplug → TurboFan
 
 ## Status
 
-Pre-alpha. The full 3-tier pipeline is wired end-to-end — real Arc bytecode
+Pre-alpha. The full 3-tier pipeline is wired end-to-end, Arc bytecode
 runs through interpreter → Tier-1 baseline SSA JIT → Tier-2 Sea of Nodes
 optimizing JIT, with background compilation via enkiTS and OSR support.
 
-| Component                          | Status            |
-| ---------------------------------- | ----------------- |
-| Arc bytecode headers               | implemented       |
-| Tier-0 interpreter (all opcodes)   | implemented       |
-| Real heap objects (Number/String/List/Function/Instance/Class) | implemented |
-| Real symbol table (hash map)       | implemented       |
-| Inline caches + type feedback      | implemented       |
-| Safepoint polling                  | implemented       |
-| Tier-1 baseline SSA JIT            | implemented       |
-| Chunk → Tier-1 lowering            | implemented       |
-| Linear-scan register allocation    | implemented       |
-| asmjit codegen (all Tier-1 ops)    | implemented       |
-| Tier-2 Sea of Nodes JIT            | implemented       |
-| Tier-1 → SoN lowering              | implemented       |
-| SoN → Tier-1 lowering              | implemented       |
-| GVN + ConstantFolding + DCE passes | implemented       |
-| Pass manager (fixpoint iteration)  | implemented       |
-| Tier ladder (hot-function detect)  | implemented       |
-| Background compilation (enkiTS)    | implemented       |
-| OSR (On-Stack Replacement)          | implemented       |
-| Thread pools (enkiTS)              | wired             |
-| End-to-end CLI                     | working           |
 
 **251 tests passing.** Verified end-to-end:
 - `arcjit-cli --tier 0 --bytecode "1+2+3"` → 6 (Spark interpreter)
