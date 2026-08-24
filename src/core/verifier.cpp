@@ -17,13 +17,35 @@ verify_graph(const Graph& g, VerifierOptions opts) {
         errors.push_back({n, std::string(check), std::move(msg)});
     };
 
-    // 1. No dangling NodeIds — every edge points to a valid node.
+    // Fused single-pass verification.
+    //
+    // The previous implementation did 5 separate full-graph walks for
+    // checks 1-5. Each walk was O(N × avg_inputs). For a 200-node graph
+    // with avg 3 inputs, that's 5 × 200 × 3 = 3000 node-visits.
+    //
+    // Fused into a single walk: 200 × 3 = 600 visits. 5x fewer.
+    // Debug-only (verifier runs under #ifndef NDEBUG), but brutal on
+    // test suite runtime when many graphs are verified.
     for (uint32_t i = 1; i < g.size(); ++i) {
         NodeId id{static_cast<uint32_t>(i)};
         const Node& n = g.at(id);
-        if (has_flag(n.flags, NodeFlags::IsDead)) continue;
+        if (has_flag(n.flags, NodeFlags::IsDead)) {
+            // Check 4: No dead nodes with live users.
+            if (opts.check_no_dead_with_users && n.use_count > 0) {
+                err(id, "no_dead_with_users",
+                    std::format("dead node n{} still has {} users", i, n.use_count));
+            }
+            continue;
+        }
+
+        // Walk this node's input edges once, running all edge-relevant
+        // checks in the same loop.
+        bool is_effectful = has_flag(n.flags, NodeFlags::IsEffect);
+        bool is_pure      = has_flag(n.flags, NodeFlags::Pure);
+        bool has_effect_input = false;
 
         for (const auto& e : g.inputs_of(id)) {
+            // Check 1: No dangling NodeIds.
             if (!e.target.valid()) {
                 err(id, "no_dangling_edges",
                     std::format("input edge has invalid target (kind={})",
@@ -34,84 +56,35 @@ verify_graph(const Graph& g, VerifierOptions opts) {
                 err(id, "no_dangling_edges",
                     std::format("input edge points to n{} which is out of range (graph has {} nodes)",
                                 e.target.value, g.size()));
+                continue;
             }
-        }
-    }
 
-    // 2. Effect chain continuity — every effectful node has an effect input.
-    if (opts.check_effect_chain) {
-        for (uint32_t i = 1; i < g.size(); ++i) {
-            NodeId id{static_cast<uint32_t>(i)};
-            const Node& n = g.at(id);
-            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-            if (!has_flag(n.flags, NodeFlags::IsEffect)) continue;
-
-            // Effectful nodes must have at least one effect input (unless they're
-            // the Start node).
-            if (n.kind == NodeKind::Start) continue;
-
-            bool has_effect = false;
-            for (const auto& e : g.inputs_of(id)) {
-                if (e.kind == EdgeKind::Effect) { has_effect = true; break; }
-            }
-            if (!has_effect) {
-                err(id, "effect_chain_continuity",
-                    std::format("{} node has no effect input", node_kind_name(n.kind)));
-            }
-        }
-    }
-
-    // 3. Pure nodes have no effect edges.
-    if (opts.check_pure_no_effect_edges) {
-        for (uint32_t i = 1; i < g.size(); ++i) {
-            NodeId id{static_cast<uint32_t>(i)};
-            const Node& n = g.at(id);
-            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-            if (!has_flag(n.flags, NodeFlags::Pure)) continue;
-
-            for (const auto& e : g.inputs_of(id)) {
-                if (e.kind == EdgeKind::Effect) {
+            // Track effect-input presence for Check 2.
+            if (e.kind == EdgeKind::Effect) {
+                has_effect_input = true;
+                // Check 3: Pure nodes have no effect edges.
+                if (opts.check_pure_no_effect_edges && is_pure) {
                     err(id, "pure_no_effect_edges",
                         std::format("pure node {} has an effect input (n{})",
                                     node_kind_name(n.kind), e.target.value));
                 }
             }
-        }
-    }
 
-    // 4. No dead nodes with live users.
-    if (opts.check_no_dead_with_users) {
-        for (uint32_t i = 1; i < g.size(); ++i) {
-            NodeId id{static_cast<uint32_t>(i)};
-            const Node& n = g.at(id);
-            if (!has_flag(n.flags, NodeFlags::IsDead)) continue;
-            if (n.use_count > 0) {
-                err(id, "no_dead_with_users",
-                    std::format("dead node n{} still has {} users", i, n.use_count));
-            }
-        }
-    }
-
-    // 5. Use-def consistency.
-    //
-    // For each live node N with an input edge pointing to M, M's use_count
-    // should be > 0 (M is used by N). We don't check exact counts because
-    // our use-list maintenance is approximate (we don't remove uses on
-    // replace_input, only on replace_all_uses_with).
-    if (opts.check_use_def_consistency) {
-        for (uint32_t i = 1; i < g.size(); ++i) {
-            NodeId id{static_cast<uint32_t>(i)};
-            const Node& n = g.at(id);
-            if (has_flag(n.flags, NodeFlags::IsDead)) continue;
-
-            for (const auto& e : g.inputs_of(id)) {
-                if (!e.target.valid() || e.target.value >= g.size()) continue;
+            // Check 5: Use-def consistency — live node uses a dead node.
+            if (opts.check_use_def_consistency) {
                 const Node& producer = g.at(e.target);
                 if (has_flag(producer.flags, NodeFlags::IsDead) && producer.use_count > 0) {
                     err(id, "use_def_consistency",
                         std::format("node n{} uses dead node n{}", i, e.target.value));
                 }
             }
+        }
+
+        // Check 2: Effect chain continuity — every effectful node (except
+        // Start) has at least one effect input.
+        if (opts.check_effect_chain && is_effectful && n.kind != NodeKind::Start && !has_effect_input) {
+            err(id, "effect_chain_continuity",
+                std::format("{} node has no effect input", node_kind_name(n.kind)));
         }
     }
 
