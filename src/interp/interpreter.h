@@ -442,30 +442,34 @@ private:
                 case OpCode::Sub: {
                     Value b = pop_(); Value a = pop_();
                     if (a.is_int() && b.is_int()) {
-                        push_(Value::Int(a.as_int() - b.as_int()));
+                        Value v = Value::Int(a.as_int() - b.as_int());
+                        push_(v); record_feedback_(offset_before, v);
                     } else if (a.is_number() && b.is_number()) {
                         double na = a.is_int() ? static_cast<double>(a.as_int()) : a.as_float();
                         double nb = b.is_int() ? static_cast<double>(b.as_int()) : b.as_float();
-                        push_(Value::Float(na - nb));
+                        Value v = Value::Float(na - nb);
+                        push_(v); record_feedback_(offset_before, v);
                     } else {
                         Value res = do_arith_slow_(op, a, b, result);
                         if (!result.ok()) goto handle_error;
-                        push_(res);
+                        push_(res); record_feedback_(offset_before, res);
                     }
                     break;
                 }
                 case OpCode::Mul: {
                     Value b = pop_(); Value a = pop_();
                     if (a.is_int() && b.is_int()) {
-                        push_(Value::Int(a.as_int() * b.as_int()));
+                        Value v = Value::Int(a.as_int() * b.as_int());
+                        push_(v); record_feedback_(offset_before, v);
                     } else if (a.is_number() && b.is_number()) {
                         double na = a.is_int() ? static_cast<double>(a.as_int()) : a.as_float();
                         double nb = b.is_int() ? static_cast<double>(b.as_int()) : b.as_float();
-                        push_(Value::Float(na * nb));
+                        Value v = Value::Float(na * nb);
+                        push_(v); record_feedback_(offset_before, v);
                     } else {
                         Value res = do_arith_slow_(op, a, b, result);
                         if (!result.ok()) goto handle_error;
-                        push_(res);
+                        push_(res); record_feedback_(offset_before, res);
                     }
                     break;
                 }
@@ -543,6 +547,7 @@ private:
                     } else {
                         push_(Value::Int(0));
                     }
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::Ne: {
@@ -555,6 +560,7 @@ private:
                     } else {
                         push_(Value::Int(1));
                     }
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::Lt: {
@@ -565,6 +571,7 @@ private:
                         double nb = b.is_int() ? static_cast<double>(b.as_int()) : b.as_float();
                         push_(Value::Int(na < nb));
                     } else { result.error = InterpError::TypeError; result.is_thrown = true; goto handle_error; }
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::Gt: {
@@ -575,6 +582,7 @@ private:
                         double nb = b.is_int() ? static_cast<double>(b.as_int()) : b.as_float();
                         push_(Value::Int(na > nb));
                     } else { result.error = InterpError::TypeError; result.is_thrown = true; goto handle_error; }
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::Lte: {
@@ -585,6 +593,7 @@ private:
                         double nb = b.is_int() ? static_cast<double>(b.as_int()) : b.as_float();
                         push_(Value::Int(na <= nb));
                     } else { result.error = InterpError::TypeError; result.is_thrown = true; goto handle_error; }
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::Gte: {
@@ -595,16 +604,19 @@ private:
                         double nb = b.is_int() ? static_cast<double>(b.as_int()) : b.as_float();
                         push_(Value::Int(na >= nb));
                     } else { result.error = InterpError::TypeError; result.is_thrown = true; goto handle_error; }
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::And: {
                     Value b = pop_(); Value a = pop_();
                     push_(Value::Int(a.is_truthy() && b.is_truthy()));
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
                 case OpCode::Or: {
                     Value b = pop_(); Value a = pop_();
                     push_(Value::Int(a.is_truthy() || b.is_truthy()));
+                    record_feedback_(offset_before, peek_());
                     break;
                 }
 
