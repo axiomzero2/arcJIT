@@ -1119,7 +1119,7 @@ PassResult run_tier2_pipeline(Tier2Job& job) {
 }
 
 [[nodiscard]] std::expected<int64_t (*)(void*), std::string>
-compile_at_tier2(const Tier1Function& fn) {
+compile_at_tier2(const Tier1Function& fn, Fuse& fuse) {
     // Check if the function has branches. If it does, the SoN→Tier-1
     // linearization can't correctly reconstruct the control flow, so we
     // fall back to Tier-1 compilation (no SoN optimization).
@@ -1177,12 +1177,14 @@ compile_at_tier2(const Tier1Function& fn) {
 
     // 2b. Fuse budget check — if the compile blew a budget (time, graph size,
     // etc.), fall back to Tier-1. This prevents runaway compiles from
-    // degrading overall throughput. The previous implementation never called
-    // Fuse::check — the compile budget was dead code.
+    // degrading overall throughput. The Fuse is owned by the Runtime and
+    // shared across all compiles — so clone counts and cumulative time are
+    // tracked globally, not per-thread.
     //
-    // We use a default CompileBudget (50ms, 100k nodes, 500k edges, 256KB
-    // code, 64 guards). If any limit is exceeded, we log and fall back.
-    static thread_local Fuse fuse;  // default budget
+    // The budget is configurable via Runtime::set_compile_budget. The
+    // default (50ms, 100k nodes, 500k edges, 256KB code, 64 guards) is
+    // reasonable for small programs; large codebases should raise limits
+    // or implement adaptive budgeting based on Capacitor pressure.
     auto blown = fuse.check(static_cast<uint64_t>(elapsed_us),
                             static_cast<uint32_t>(job.graph.size()),
                             0,  // edges not tracked here (would need Graph::edge_count)

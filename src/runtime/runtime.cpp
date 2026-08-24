@@ -60,9 +60,10 @@ public:
     const Chunk*       chunk;
     ChunkEntry*        entry;
     CompilationStats*  stats;
+    Fuse*              fuse;  // Runtime-owned compile budget
 
-    explicit Tier2CompileTask(const Chunk* c, ChunkEntry* e, CompilationStats* s)
-        : chunk(c), entry(e), stats(s) {}
+    explicit Tier2CompileTask(const Chunk* c, ChunkEntry* e, CompilationStats* s, Fuse* f)
+        : chunk(c), entry(e), stats(s), fuse(f) {}
 
     void ExecuteRange(enki::TaskSetPartition, uint32_t) override {
         auto t0 = std::chrono::high_resolution_clock::now();
@@ -75,7 +76,9 @@ public:
         }
 
         // Run the full Tier-2 pipeline: lower to SoN, optimize, lower back.
-        auto maybe_entry = compile_at_tier2(*maybe_fn);
+        // Pass the Runtime's Fuse so budget limits are enforced and clone
+        // counts are tracked globally across all background compiles.
+        auto maybe_entry = compile_at_tier2(*maybe_fn, *fuse);
         if (!maybe_entry) {
             entry->tier2_compiling = false;
             return;
@@ -187,7 +190,7 @@ void Runtime::maybe_compile_(ChunkEntry& entry, const Chunk& chunk) {
         && entry.tier2_entry == nullptr) {
         bool expected = false;
         if (entry.tier2_compiling.compare_exchange_strong(expected, true)) {
-            auto* task = new Tier2CompileTask(&chunk, &entry, &stats_);
+            auto* task = new Tier2CompileTask(&chunk, &entry, &stats_, fuse_.get());
             scheduler_->AddTaskSetToPipe(task);
         }
     }
@@ -385,7 +388,7 @@ Runtime::compile_tier2(const Chunk& chunk) {
         }
     }
 
-    auto maybe_entry = compile_at_tier2(*maybe_fn);
+    auto maybe_entry = compile_at_tier2(*maybe_fn, *fuse_);
     if (!maybe_entry) return std::unexpected(maybe_entry.error());
 
     ChunkEntry& entry = entry_for_(chunk);

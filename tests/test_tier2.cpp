@@ -75,7 +75,8 @@ TEST(Tier2Test, LowerAndBack) {
 // Test compile_at_tier2 — the end-to-end compilation entry point.
 TEST(Tier2Test, CompileAtTier2) {
     Tier1Function fn = make_demo_add3();
-    auto maybe_entry = compile_at_tier2(fn);
+    Fuse fuse;  // default budget
+    auto maybe_entry = compile_at_tier2(fn, fuse);
     ASSERT_TRUE(maybe_entry.has_value()) << maybe_entry.error();
     auto f = *maybe_entry;
     EXPECT_EQ(f(nullptr), 6);

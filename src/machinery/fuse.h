@@ -75,6 +75,12 @@ public:
     [[nodiscard]] const CompileBudget& budget() const noexcept { return budget_; }
     [[nodiscard]] uint32_t total_clones() const noexcept { return total_clones_; }
 
+    // Update the budget without losing cumulative state (clone counts, etc.).
+    // Useful for adaptive budgeting — e.g., tightening limits when the code
+    // cache is under pressure, or loosening for a hot function that deserves
+    // more compile effort.
+    void set_budget(CompileBudget b) noexcept { budget_ = b; }
+
     [[nodiscard]] std::string dump() const;
 
 private:

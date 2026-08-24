@@ -15,6 +15,7 @@
 #include <string>
 
 #include "core/graph.h"
+#include "machinery/fuse.h"
 #include "passman/pass.h"
 #include "tier1/tier1.h"
 
@@ -66,8 +67,14 @@ PassResult run_tier2_pipeline(Tier2Job& job);
 
 // End-to-end: lower + optimize + lower-back + emit + execute.
 // This is what the runtime calls to compile a Tier1Function at Tier 2.
+//
+// The `fuse` parameter provides the compile budget (time, graph size, code
+// size, guard count, clone count). If any budget is exceeded during
+// compilation, the function falls back to Tier-1 compilation. Passing a
+// Fuse with a default CompileBudget gives 50ms / 100k nodes / 256KB code.
+// Production runtimes should tune the budget via Runtime::set_compile_budget.
 [[nodiscard]] std::expected<int64_t (*)(void*), std::string>
-compile_at_tier2(const Tier1Function& fn);
+compile_at_tier2(const Tier1Function& fn, Fuse& fuse);
 
 // Dump the graph as a Graphviz DOT file.
 [[nodiscard]] std::string dump_graph_dot(const Graph& g);

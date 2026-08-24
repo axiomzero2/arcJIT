@@ -175,6 +175,21 @@ public:
     // when no tier-up is intended.
     void set_profiling_enabled(bool enabled);
 
+    // Set the compile budget for Tier-2 (Surge) compilations. The budget
+    // controls time/memory/graph-size limits — if any is exceeded, the
+    // compile falls back to Tier-1. Tune this for your workload:
+    //   - Small programs: default is fine (50ms, 100k nodes, 256KB code)
+    //   - Large codebases: raise max_compile_time_us and max_graph_nodes
+    //   - Memory-constrained: lower max_code_size_bytes and max_clones
+    // The budget is shared across all compiles (global clone count, etc.).
+    // Updating the budget preserves cumulative state (clone counts).
+    void set_compile_budget(CompileBudget budget) { fuse_->set_budget(budget); }
+
+    // Get the current compile budget (for inspection / debugging).
+    [[nodiscard]] const CompileBudget& compile_budget() const noexcept {
+        return fuse_->budget();
+    }
+
 private:
     std::unique_ptr<enki::TaskScheduler> scheduler_;
     SafepointManager                       safepoint_mgr_;
