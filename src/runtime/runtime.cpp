@@ -353,6 +353,38 @@ Runtime::compile_tier2(const Chunk& chunk) {
     auto maybe_fn = lower_chunk_to_tier1(chunk, "tier2_input");
     if (!maybe_fn) return std::unexpected(maybe_fn.error());
 
+    // Query the Governor for speculation decisions at each bytecode offset
+    // that has profile data. This makes the Governor's logic exercised and
+    // observable — the first step toward having SoN passes consume its
+    // decisions (e.g., inserting guards, cloning, polymorphic inline caches).
+    //
+    // The previous implementation never called Governor::decide — the Meter
+    // collected profile data but nothing consumed it.
+    //
+    // We sample a few offsets to avoid scanning the entire Meter. The
+    // Governor's decision is logged when ARCJIT_LOG_GOVERNOR=1 is set.
+    if (std::getenv("ARCJIT_LOG_GOVERNOR") != nullptr) {
+        auto& meter = *meter_;
+        for (uint32_t off = 0; off < meter.entry_count(); ++off) {
+            const auto& pe = meter.entry_for(off);
+            if (pe.total_samples < 10) continue;
+            SpeculationContext ctx;
+            ctx.confidence = pe.confidence();
+            ctx.is_monomorphic = pe.is_monomorphic;
+            ctx.distinct_types = pe.distinct_types;
+            ctx.deopt_count = static_cast<uint32_t>(pe.deopt_count);
+            auto decision = Governor::decide(ctx);
+            if (decision != SpeculationDecision::DoNotSpeculate) {
+                std::fprintf(stderr,
+                    "[arcjit] Governor @offset=%u: %s (confidence=%d, mono=%d, types=%u)\n",
+                    off, Governor::decision_name(decision).data(),
+                    static_cast<int>(ctx.confidence),
+                    static_cast<int>(ctx.is_monomorphic),
+                    ctx.distinct_types);
+            }
+        }
+    }
+
     auto maybe_entry = compile_at_tier2(*maybe_fn);
     if (!maybe_entry) return std::unexpected(maybe_entry.error());
 

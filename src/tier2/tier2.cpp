@@ -2,12 +2,15 @@
 #include "tier2/tier2.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <expected>
 #include <format>
 #include <print>
 #include <unordered_map>
+
+#include "machinery/fuse.h"
 
 namespace arcjit {
 
@@ -1167,7 +1170,36 @@ compile_at_tier2(const Tier1Function& fn) {
     if (!r1) return std::unexpected(r1.error());
 
     // 2. Run the optimization pipeline.
+    auto t0 = std::chrono::high_resolution_clock::now();
     run_tier2_pipeline(job);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+    // 2b. Fuse budget check — if the compile blew a budget (time, graph size,
+    // etc.), fall back to Tier-1. This prevents runaway compiles from
+    // degrading overall throughput. The previous implementation never called
+    // Fuse::check — the compile budget was dead code.
+    //
+    // We use a default CompileBudget (50ms, 100k nodes, 500k edges, 256KB
+    // code, 64 guards). If any limit is exceeded, we log and fall back.
+    static thread_local Fuse fuse;  // default budget
+    auto blown = fuse.check(static_cast<uint64_t>(elapsed_us),
+                            static_cast<uint32_t>(job.graph.size()),
+                            0,  // edges not tracked here (would need Graph::edge_count)
+                            0,  // code_size unknown until after asmjit emission
+                            0); // guard_count not tracked yet
+    if (!blown.empty()) {
+        if (std::getenv("ARCJIT_LOG_TIER2_FALLBACK") != nullptr) {
+            std::fprintf(stderr,
+                "[arcjit] Surge fell back to Jolt for '%s' (budget blown: %s, %lldus, %u nodes)\n",
+                fn.name.c_str(), blown.c_str(),
+                static_cast<long long>(elapsed_us),
+                static_cast<uint32_t>(job.graph.size()));
+        }
+        static thread_local std::unique_ptr<Tier1Compiler> fb_compiler;
+        if (!fb_compiler) fb_compiler = std::make_unique<Tier1Compiler>();
+        return fb_compiler->compile(fn);
+    }
 
     // 3. Lower SoN → Tier-1.
     auto maybe_lowered = lower_son_to_tier1(job);

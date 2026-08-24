@@ -43,6 +43,7 @@
 #include "machinery/probe.h"
 #include "machinery/regulator.h"
 #include "machinery/fuse.h"
+#include "machinery/governor.h"
 #include "machinery/trip.h"
 #include "machinery/capacitor.h"
 #include "machinery/relay.h"

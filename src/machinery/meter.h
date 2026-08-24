@@ -117,6 +117,10 @@ public:
         return entries_[bytecode_offset];
     }
 
+    // Number of profile entries (highest offset + 1). Useful for iterating
+    // all entries when querying the Governor for speculation decisions.
+    [[nodiscard]] size_t entry_count() const noexcept { return entries_.size(); }
+
     // Get the overall confidence summary.
     struct Summary {
         size_t   total_sites    = 0;
